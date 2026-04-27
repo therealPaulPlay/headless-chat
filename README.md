@@ -1,6 +1,6 @@
 # headless-chat
 
-Slightly opinionated core chat logic. No database implementation, no transport implementation, and no UI – you are responsible for wiring it up. Use this if you need...
+Slightly opinionated core chat logic. No database implementation, no transport implementation, and no UI – you are responsible for wiring it up. Use this if you need...
 
 - A simple API
 - Chat logic that works like you'd expect
@@ -12,6 +12,7 @@ Slightly opinionated core chat logic. No database implementation, no transport i
 
 - No read by / latest read message implementation, bring your own if needed
 - Assumes sane conversation and invite amounts (since they are not paginated)
+- No message search
 
 ## Client API
 
@@ -40,7 +41,7 @@ A function that takes no parameters and returns `customAuthData: any` that is se
 | async revokeInvite(inviteId: string) | - | Revoke an invitation. |
 | async acceptInvite(conversationId: string) | - | Join a conversation from an invite. Deletes all invites for that conversation for this participant. |
 | async declineInvite(conversationId: string) | - | Decline and delete all invites for a conversation. |
-| async leaveConversation(conversationId: string) | -| Leave a conversation. The conversation will be deleted when all participants have left. |
+| async leaveConversation(conversationId: string) | - | Leave a conversation. The conversation will be deleted when all participants have left. |
 | async setIndicator(conversationId: string) | indicatorId: string | Set the typing indicator. Has a TTL of 3 seconds, setting every two seconds to avoid gaps/flicker is suggested. |
 | async removeIndicator(conversationId: string) | - | Remove the typing indicator. Automatically, synchronously called when sending a message. |
 
@@ -51,7 +52,7 @@ A function that takes no parameters and returns `customAuthData: any` that is se
 | async editMessage(conversationId: string, messageId: string, message: string, options: MessageOptions) | - | Edit a message. |
 | async deleteMessage(messageId: string) | - | Delete a message. |
 | async addReaction(messageId: string, reaction: string) | reactionId: string | Add a reaction (valid unicode emoji) to a message. Dedup is automatically handled by the server. |
-| async removeReaction(reactionId) | - | Remove a reaction from a message. |
+| async removeReaction(reactionId: string) | - | Remove a reaction from a message. |
 
 **Getters:**
 | Method | Returns | Description |
@@ -117,7 +118,7 @@ A function that takes `data: Uint8Array` and pushes it to the client, where it i
 | ------ | ---------- | --------------------- | ------------|
 | onCreateConversation(handler: function) | conversation: Conversation | - | Should create the provided conversation in the database. |
 | onCreateMessage(handler: function) | message: Message | - | Should create the provided message in the database. |
-| onCreateReaction(handler: function) | reaction: Reaction | - | Should create the provided reaction in the database. |
+| onCreateReaction(handler: function) | reaction: Reaction | - | Should create the provided reaction in the database. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
 | onCreateInvite(handler: function) | invite: Invite | - | Should create the provided invite in the database. |
 | onCreateIndicator(handler: function) | indicator: Indicator | - | Should create or re-create (if already existent) a typing indicator. |
 
@@ -125,7 +126,7 @@ A function that takes `data: Uint8Array` and pushes it to the client, where it i
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
 | onReadConversations(handler: function) | participantId: string | conversations: Conversation[] | Should return all conversations from the database that a given participant takes part in. |
-| onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages from the database matching the pagination parameters. With after set to true, `cursorMessageId` should be excluded, wheras with after set to false, it should be included. This is so that there's a way to lookup just one message (in case it changed).
+| onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages from the database matching the pagination parameters. With after set to true, `cursorMessageId` should be excluded, whereas with after set to false, it should be included. This is so that there's a way to look up just one message (in case it changed).
 | onReadInvites(handler: function) | participantId: string | invites: Invite[] | Should return all invites created by or created for the provided participant. |
 | onReadAliases(handler: function) | participants: string[] | aliases: Alias[] | Should return all aliases for the provided participant IDs. In a simple implementation, this can look up the usernames from an existing users table. |
 | onReadIndicators(handler: function) | conversationId: string | indicators: Indicator[] | Should return all typing indicators for a conversation. |
@@ -141,7 +142,7 @@ A function that takes `data: Uint8Array` and pushes it to the client, where it i
 | ------ | ---------- | --------------------- | ------------|
 | onDeleteConversation(handler: function) | conversationId: string | - | Should delete the specified conversation in the database. |
 | onDeleteMessage(handler: function) | messageId: string | - | Should delete the specified message in the database. |
-| onDeleteReaction(handler: function) | reactionId: string | - | Should delete the specified reaction in the database. |
+| onDeleteReaction(handler: function) | reactionId: string | - | Should delete the specified reaction in the database. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
 | onDeleteInvites(handler: function) | invites: Invite[] | - | Should delete the provided invites in the database. |
 | onDeleteExpiredIndicators(handler: function) | - | - | Should delete all entries older than 3s, measured by the `createdAt` field. The library calls this every `indicatorCleanupInterval` seconds. |
 | onDeleteIndicator(handler: function) | indicatorId: string | - | Should delete the specific indicator. |
@@ -159,6 +160,9 @@ The `hc` prefix stands for headless-chat. It's suggested to use the following ta
 `hc_conversations` `hc_messages`, `hc_indicators`, `hc_reactions`, `hc_invites` and, if aliases are configurable, `hc_aliases`. Ensure proper indexing.
 
 It's suggested that messages have a foreign key to the referenced conversations entry with deletion propagation, and that reactions have a foreign key to the referenced messages entry with deletion propagation.
+
+> [!NOTE]
+> `onReadMessages` is expected to return messages with their `reactions` array already populated. A single join query against `hc_messages` and `hc_reactions` per page is the recommended approach – avoid per-message lookups.
 
 The server API does not provide any scaffolding for cleaning up or otherwise modifying conversations, invites and messages without user-intent. However, such functions can be added manually since the database is a concern of the library's consumer.
 
