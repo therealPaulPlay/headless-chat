@@ -142,13 +142,13 @@ A function that takes `data: Uint8Array` and pushes it to the client, where it i
 **Delete handlers:**
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
-| onDeleteConversation(handler: function) | conversationId: string | - | Should delete the specified conversation in the database. |
 | onDeleteMessage(handler: function) | messageId: string | - | Should delete the specified message in the database. |
 | onDeleteReaction(handler: function) | reactionId: string | - | Should delete the specified reaction in the database. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
+| onDeleteConversationWithMessagesAndReactions(handler: function) | conversationId: string | - | Should delete the conversation, all its messages, and all reactions to those messages. Recommended to wrap in a single transaction with three statements: delete reactions joined to messages by `messageId` filtered by `conversationId`, then delete messages by `conversationId`, then delete the conversation by `conversationId`. |
 | onDeleteInvites(handler: function) | inviteIds: string[] | - | Should delete the provided invites in the database. |
 | onDeleteExpiredIndicators(handler: function) | - | - | Should delete all entries older than 3s, measured by the `createdAt` field. The library calls this every `indicatorCleanupInterval` seconds. |
 | onDeleteIndicator(handler: function) | indicatorId: string | - | Should delete the specific indicator. |
-| onDeleteConversationParticipantActivities(handler: function) |  conversationIds: string[], participantIds: string[] | - | Should delete all matching activities. Multiple participants are provided when a conversation gets deleted, multiple conversations are provided when a participant leaves (potentially through propagation of `deleteParticipant`). |
+| onDeleteConversationParticipantActivities(handler: function) |  conversationIds: string[], participantIds: string[] | - | Should delete all matching activities. Multiple participants are provided when a conversation gets deleted, multiple conversations are provided when a participant leaves (potentially through propagation of `deleteParticipant`). |
 
 **Validation handlers:**
 | Method | Calls with | Expected return value | Description |
@@ -161,8 +161,6 @@ A function that takes `data: Uint8Array` and pushes it to the client, where it i
 
 The `hc` prefix stands for headless-chat. It's suggested to use the following tables:
 `hc_conversations`, `hc_participant_activities`, `hc_messages`, `hc_indicators`, `hc_reactions`, `hc_invites` and, if aliases are configurable, `hc_aliases`. Ensure proper indexing.
-
-It's suggested that messages have a foreign key to the referenced conversations entry with deletion propagation, and that reactions have a foreign key to the referenced messages entry with deletion propagation.
 
 > [!NOTE]
 > `onReadMessages` is expected to return messages with their `reactions` array already populated. A single join query against `hc_messages` and `hc_reactions` per page is the recommended approach – avoid per-message lookups.
