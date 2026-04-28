@@ -1,5 +1,49 @@
 {
   "devDependencies": {
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  },
+  "name": "headless-chat",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Core chat logic for integrating chat functionality into an existing application.",
+  "files": [
+    "src",
+    "dist"
+  ],
+  "exports": {
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    }
+  },
+  "sideEffects": false,
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/therealPaulPlay/headless-chat.git"
+  },
+  "keywords": [
+    "chat",
+    "headless",
+    "live",
+    "realtime",
+    "messenger"
+  ],
+  "author": "PaulPlay",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/therealPaulPlay/headless-chat/issues"
+  },
+  "homepage": "https://github.com/therealPaulPlay/headless-chat#readme",
+  "dependencies": {
+    "@msgpack/msgpack": "^3.1.3"
   }
 }

@@ -16,13 +16,13 @@ Slightly opinionated core chat logic. No database implementation, no transport i
 
 ## Client API
 
-Constructor: `new Client(participantId: string, writeFn: ClientWriteFunction, authFn: ClientAuthFunction)`
+Constructor: `new Client(dispatch: ClientDispatch, participantId: string, getAuthData: GetAuthData)`
 
-#### ClientWriteFunction
+#### ClientDispatch
 
 A function that takes `data: Uint8Array` and sends it to the server, where it is passed to the server's `receive()` method. Can use a realtime protocol, but also works with HTTP requests. Uses `MessagePack` under the hood.
 
-#### ClientAuthFunction
+#### GetAuthData
 
 A function that takes no parameters and returns `customAuthData: any` that is sent to the server and used inside `onParticipantAuth` to verify that this participant is authorized as the provided participant ID.
 
@@ -79,22 +79,11 @@ A function that takes no parameters and returns `customAuthData: any` that is se
 | onError(handler: function) | error: string | Subscribe to server-originated errors (e.g. failed to send message). |
 | offError(handler: function) | - | Unsubscribe a handler. |
 
-### Client types
-
-#### MessageOptions
-
-```ts
-{
-    reference: string | null // Reply to a message referenced by a message ID
-    isForwarded: boolean // Whether to display a message as 'forwarded'
-}
-```
-
 ## Server API
 
-Constructor: `new Server(writeFn: ServerWriteFunction, indicatorCleanupInterval: number)`
+Constructor: `new Server(dispatch: ServerDispatch, indicatorCleanupInterval: number)`
 
-#### ServerWriteFunction
+#### ServerDispatch
 
 A function that takes `data: Uint8Array` and pushes it to the client, where it is passed to the client's `receive()` method. Recommended to be used with SSE or WS, but is protocol agnostic. Uses `MessagePack` under the hood.
 
@@ -127,7 +116,7 @@ A function that takes `data: Uint8Array` and pushes it to the client, where it i
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
 | onReadConversations(handler: function) | participantId: string | conversations: Conversation[] | Should return all conversations from the database that a given participant takes part in and include both the participant activity as well as the last message using a three-way database join. |
-| onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages from the database matching the pagination parameters. With `after` set to true, `cursorMessageId` should be excluded, whereas with after set to false, it should be included. This is so that there's a way to look up just one message (in case it changed). The library creates or updates the participant activity if a message newer than the one specified in `lastReadMessageCreatedAt` (which is cached at runtime) is fetched.
+| onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages from the database matching the pagination parameters. With `after` set to true, `cursorMessageId` should be excluded, whereas with after set to false, it should be included. The library creates or updates the participant activity if a message newer than the one specified in `lastReadMessageCreatedAt` (cached at runtime) is fetched.
 | onReadInvites(handler: function) | participantId: string | invites: Invite[] | Should return all invites created by or created for the provided participant. |
 | onReadAliases(handler: function) | participants: string[] | aliases: Alias[] | Should return all aliases for the provided participant IDs. In a simple implementation, this can look up the usernames from an existing users table. |
 | onReadIndicators(handler: function) | conversationId: string | indicators: Indicator[] | Should return all typing indicators for a conversation. |
@@ -186,6 +175,7 @@ All IDs are defined as strings so that you can integrate it in any existing sche
 ```
 
 #### Message
+
 ```ts
 {
     messageId: string,
@@ -197,6 +187,15 @@ All IDs are defined as strings so that you can integrate it in any existing sche
     deleted: boolean,
     createdAt: Date,
     modifiedAt: Date | null,
+}
+```
+
+#### MessageOptions
+
+```ts
+{
+    referenceMessageId: string | null // Reply to a message referenced by a message ID
+    isForwarded: boolean // Whether to display a message as 'forwarded'
 }
 ```
 
@@ -229,7 +228,7 @@ All IDs are defined as strings so that you can integrate it in any existing sche
 {
     inviteId: string,
     fromParticipantId: string, // The participant who sent the invitation
-    forParticipantId: string, // The participant who is invited
+    toParticipantId: string, // The participant who is invited
     conversation: Conversation,
     createdAt: Date,
 }
