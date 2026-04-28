@@ -1,6 +1,7 @@
 type RateLimitOptions = {
-    inviteLimit1d?: number,
-    inviteLimit1h?: number,
+    inviteLimitPerDay?: number,
+    inviteLimitPerHour?: number,
+    messageLimitPerSecond?: number,
     conversationParticipantLimit?: number,
 }
 

@@ -93,22 +93,23 @@ An object that configures the rate limiting of key actions the library handles.
 
 ```ts
 {
-    inviteLimit1d?: number, // Defaults to 50
-    inviteLimit1h?: number, // Defaults to 10
+    inviteLimitPerDay?: number, // Defaults to 50
+    inviteLimitPerHour?: number, // Defaults to 10
+    messageLimitPerSecond?: number, // Defaults to 5
     conversationParticipantLimit?: number, // Defaults to 100, acts as the hard global limit that takes precedence over maxSize
 }
 ```
 
 #### CleanupOptions
 
-An object that configures the automated cleanup. Cleanup measured in days runs once per day.
+An object that configures the automated cleanup. Cleanup measured in days runs once per day. Treats values <= 0 as invalid.
 
 ```ts
 {
     indicatorCleanupIntervalSeconds?: number, // Defaults to 5, cannot be disabled
-    messageAfterDays?: number, // Defaults to 0 = disabled
-    conversationAfterInactiveDays?: number, // Defaults to 0 = disabled, inactive means no new messages have been sent
-    inviteAfterDays?: number, // Defaults to 7, can be set to 0 = disabled
+    messageAfterDays?: number, // Defaults to null = disabled
+    conversationAfterInactiveDays?: number, // Defaults to null = disabled, inactive means no new messages have been sent
+    inviteAfterDays?: number, // Defaults to 7, can be set to null = disabled
 }
 ```
 
@@ -126,7 +127,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
 | deleteParticipant(participantId: string) | - | When a user is deleted in your backend, call this method. It will remove the participant from all conversations. Note that messages will continue to exist which is intended. You can show them as "from deleted user" or whatever you return for the alias. |
-| acceptInvite(inviteId: string) | - | Can be used for auto-accepting invites on behalf of participants, e.g. for participants that are already connected in your own system. |
+| acceptInvite(inviteId: string) | - | Can be used for auto-accepting invites on behalf of participants, e.g. for participants that are already connected in your own system. For auto-declining, throwing inside the creation handler is the intended solution. |
 
 **Create handlers:**
 | Method | Calls with | Expected return value | Description |
