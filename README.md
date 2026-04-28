@@ -10,9 +10,9 @@ Slightly opinionated core chat logic. No database implementation, no transport i
 
 #### Limitations
 
-- Assumes sane conversation and invite amounts (since they are not paginated)
-- No message search
-- No rate limiting, bring your own
+- Assumes sane conversation and invite amounts (they are not paginated)
+- No message search, bring your own if needed
+- No transport-level rate limiting, bring your own
 
 ## Client API
 
@@ -37,12 +37,12 @@ A function that takes no parameters and returns `customAuthData: any` that is se
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
 | async createConversation(maxSize?: number) | conversationId: string | Create a conversation optionally with a maximum size (automatically enforced). |
-| async createInvite(conversationId: string, participantId: string) | inviteId: string | Invite a participant to a conversation. Dedup is automatically handled by the server. |
+| async createInvite(conversationId: string, participantId: string) | inviteId: string | Invite a participant to a conversation. Deduplication is automatically handled by the server. |
 | async revokeInvite(inviteId: string) | - | Revoke an invitation. |
 | async acceptInvite(conversationId: string) | - | Join a conversation from an invite. Deletes all invites for that conversation for this participant. |
 | async declineInvite(conversationId: string) | - | Decline and delete all invites for a conversation. |
 | async leaveConversation(conversationId: string) | - | Leave a conversation. The conversation will be deleted when all participants have left. |
-| async setIndicator(conversationId: string) | indicatorId: string | Set the typing indicator. Has a TTL of 3 seconds, setting every two seconds to avoid gaps/flicker is suggested. |
+| async setIndicator(conversationId: string) | indicatorId: string | Set the typing indicator. Has a TTL defined in the handler, setting every X-1 seconds to avoid gaps/flicker is suggested. |
 | async removeIndicator(conversationId: string) | - | Remove the typing indicator. Automatically, synchronously called when sending a message. |
 
 **Messages:**
@@ -51,7 +51,7 @@ A function that takes no parameters and returns `customAuthData: any` that is se
 | async sendMessage(conversationId: string, message: string, options: MessageOptions) | messageId: string | Send a message. |
 | async editMessage(conversationId: string, messageId: string, message: string, options: MessageOptions) | - | Edit a message. |
 | async deleteMessage(messageId: string) | - | Delete a message. |
-| async addReaction(messageId: string, reaction: string) | reactionId: string | Add a reaction (valid unicode emoji) to a message. Dedup is automatically handled by the server. |
+| async addReaction(messageId: string, reaction: string) | reactionId: string | Add a reaction (valid unicode emoji) to a message. Deduplication is automatically handled by the server, participants can only add one. |
 | async removeReaction(reactionId: string) | - | Remove a reaction from a message. |
 
 **Getters:**
@@ -81,11 +81,36 @@ A function that takes no parameters and returns `customAuthData: any` that is se
 
 ## Server API
 
-Constructor: `new Server(dispatch: ServerDispatch, indicatorCleanupInterval: number)`
+Constructor: `new Server(dispatch: ServerDispatch, rateLimits?: RateLimitOptions, cleanup?: CleanupOptions)`
 
 #### ServerDispatch
 
 A function that takes `data: Uint8Array` and pushes it to the client, where it is passed to the client's `receive()` method. Recommended to be used with SSE or WS, but is protocol agnostic. Uses `MessagePack` under the hood.
+
+#### RateLimitOptions
+
+An object that configures the rate limiting of key actions the library handles.
+
+```ts
+{
+    inviteLimit1d?: number, // Defaults to 50
+    inviteLimit1h?: number, // Defaults to 10
+    conversationParticipantLimit?: number, // Defaults to 100, acts as the hard global limit that takes precedence over maxSize
+}
+```
+
+#### CleanupOptions
+
+An object that configures the automated cleanup. Cleanup measured in days runs once per day.
+
+```ts
+{
+    indicatorCleanupIntervalSeconds?: number, // Defaults to 5, cannot be disabled
+    messageAfterDays?: number, // Defaults to 0 = disabled
+    conversationAfterInactiveDays?: number, // Defaults to 0 = disabled, inactive means no new messages have been sent
+    inviteAfterDays?: number, // Defaults to 7, can be set to 0 = disabled
+}
+```
 
 ### Methods
 
@@ -101,6 +126,7 @@ A function that takes `data: Uint8Array` and pushes it to the client, where it i
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
 | deleteParticipant(participantId: string) | - | When a user is deleted in your backend, call this method. It will remove the participant from all conversations. Note that messages will continue to exist which is intended. You can show them as "from deleted user" or whatever you return for the alias. |
+| acceptInvite(inviteId: string) | - | Can be used for auto-accepting invites on behalf of participants, e.g. for participants that are already connected in your own system. |
 
 **Create handlers:**
 | Method | Calls with | Expected return value | Description |
@@ -136,7 +162,7 @@ A function that takes `data: Uint8Array` and pushes it to the client, where it i
 | onDeleteReaction(handler: function) | reactionId: string | - | Should delete the specified reaction in the database. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
 | onDeleteConversationWithMessagesAndReactions(handler: function) | conversationId: string | - | Should delete the conversation, all its messages, and all reactions to those messages. Recommended to wrap in a single transaction with three statements: delete reactions joined to messages by `messageId` filtered by `conversationId`, then delete messages by `conversationId`, then delete the conversation by `conversationId`. |
 | onDeleteInvites(handler: function) | inviteIds: string[] | - | Should delete the provided invites in the database. |
-| onDeleteExpiredIndicators(handler: function) | - | - | Should delete all entries older than 3s, measured by the `createdAt` field. The library calls this every `indicatorCleanupInterval` seconds. |
+| onDeleteExpiredIndicators(handler: function) | - | - | Should delete all entries older than X-seconds (5s is recommended), measured by the `createdAt` field. The library calls this every `indicatorCleanupInterval` seconds. |
 | onDeleteIndicator(handler: function) | indicatorId: string | - | Should delete the specific indicator. |
 | onDeleteConversationParticipantActivities(handler: function) |  conversationIds: string[], participantIds: string[] | - | Should delete all matching activities. Multiple participants are provided when a conversation gets deleted, multiple conversations are provided when a participant leaves (potentially through propagation of `deleteParticipant`). |
 
