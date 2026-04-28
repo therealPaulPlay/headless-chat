@@ -12,6 +12,7 @@ Slightly opinionated core chat logic. No database implementation, no transport i
 
 - Assumes sane conversation and invite amounts (since they are not paginated)
 - No message search
+- No rate limiting, bring your own
 
 ## Client API
 
@@ -57,7 +58,7 @@ A function that takes no parameters and returns `customAuthData: any` that is se
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
 | async getConversations(participantId: string) | conversations: Conversation[] | Get all conversations the participant is in. |
-| async getMessages(conversationId: string, cursorMessageId: string | null, after: boolean, amount: number) | { messages: Message[], remainingInDirection: number } | Get messages in a paginated way where one message serves as the cursor and you can get `amount` messages from before or after it. If the cursor is null, the newest messages will be returned. |
+| async getMessages(conversationId: string, cursorMessageId: `string | null`, after: boolean, amount: number) | { messages: Message[], remainingInDirection: number } | Get messages in a paginated way where one message serves as the cursor and you can get `amount` messages from before or after it. If the cursor is null, the newest messages will be returned. |
 | async getInvites(participantId: string) | invites: Invite[]| Get all invites, both for you and by you. |
 | async getAliases([participantId: string, participantId...]) | aliases: Alias[] | Get server-defined aliases for participants. This serves as a simple lookup for your server-defined username system. |
 
@@ -119,7 +120,7 @@ A function that takes `data: Uint8Array` and pushes it to the client, where it i
 | onCreateMessage(handler: function) | message: Message | - | Should create the provided message in the database. |
 | onCreateReaction(handler: function) | reaction: Reaction | - | Should create the provided reaction in the database. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
 | onCreateInvite(handler: function) | invite: Invite | - | Should create the provided invite in the database. |
-| onCreateIndicator(handler: function) | indicator: Indicator | - | Should create or re-create (if already existent) a typing indicator. |
+| onCreateIndicator(handler: function) | indicator: Indicator | - | Should create or re-create (if one already exists) a typing indicator. |
 | onCreateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | - | Should create a participant activity entry in the database. |
 
 **Read handlers:**
@@ -130,19 +131,19 @@ A function that takes `data: Uint8Array` and pushes it to the client, where it i
 | onReadInvites(handler: function) | participantId: string | invites: Invite[] | Should return all invites created by or created for the provided participant. |
 | onReadAliases(handler: function) | participants: string[] | aliases: Alias[] | Should return all aliases for the provided participant IDs. In a simple implementation, this can look up the usernames from an existing users table. |
 | onReadIndicators(handler: function) | conversationId: string | indicators: Indicator[] | Should return all typing indicators for a conversation. |
-| onReadConversationParticipantActivity(handler: function) | conversationId: string, participantId: string | participantActivity: ParticipantActivity | null | Should return the participant activity from the database or `null` if it does not exist. |
+| onReadConversationParticipantActivity(handler: function) | conversationId: string, participantId: string | `participantActivity: ParticipantActivity | null` | Should return the participant activity from the database or `null` if it does not exist. |
 
 **Update handlers:**
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
 | onUpdateConversation(handler: function) | conversation: Conversation | - | Should update the provided conversation in the database. |
-| onUpdateMessage(handler: function) | message: Message | - | Should update the provided message in the database. The `modifiedAt` field is automatically adjusted by the library if the update is an edit. |
+| onUpdateMessage(handler: function) | message: Message | - | Should update the provided message in the database. The `modifiedAt` field is automatically adjusted by the library if the update is an edit. Existing reactions are preserved across edits. |
 | onUpdateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | - | Should update the provided participant activity in the database. |
 
 **Delete handlers:**
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
-| onDeleteMessage(handler: function) | messageId: string | - | Should delete the specified message in the database. |
+| onDeleteMessageWithReactions(handler: function) | messageId: string | - | Should delete the specified message and all its reactions. Recommended to wrap in a single transaction: delete reactions by `messageId`, then delete the message by `messageId`. |
 | onDeleteReaction(handler: function) | reactionId: string | - | Should delete the specified reaction in the database. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
 | onDeleteConversationWithMessagesAndReactions(handler: function) | conversationId: string | - | Should delete the conversation, all its messages, and all reactions to those messages. Recommended to wrap in a single transaction with three statements: delete reactions joined to messages by `messageId` filtered by `conversationId`, then delete messages by `conversationId`, then delete the conversation by `conversationId`. |
 | onDeleteInvites(handler: function) | inviteIds: string[] | - | Should delete the provided invites in the database. |
