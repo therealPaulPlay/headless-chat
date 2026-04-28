@@ -10,7 +10,6 @@ Slightly opinionated core chat logic. No database implementation, no transport i
 
 #### Limitations
 
-- No read by / latest read message implementation, bring your own if needed
 - Assumes sane conversation and invite amounts (since they are not paginated)
 - No message search
 
@@ -121,21 +120,24 @@ A function that takes `data: Uint8Array` and pushes it to the client, where it i
 | onCreateReaction(handler: function) | reaction: Reaction | - | Should create the provided reaction in the database. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
 | onCreateInvite(handler: function) | invite: Invite | - | Should create the provided invite in the database. |
 | onCreateIndicator(handler: function) | indicator: Indicator | - | Should create or re-create (if already existent) a typing indicator. |
+| onCreateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | - | Should create a participant activity entry in the database. |
 
 **Read handlers:**
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
-| onReadConversations(handler: function) | participantId: string | conversations: Conversation[] | Should return all conversations from the database that a given participant takes part in. |
-| onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages from the database matching the pagination parameters. With after set to true, `cursorMessageId` should be excluded, whereas with after set to false, it should be included. This is so that there's a way to look up just one message (in case it changed).
+| onReadConversations(handler: function) | participantId: string | conversations: Conversation[] | Should return all conversations from the database that a given participant takes part in and include both the participant activity as well as the last message using a three-way database join. |
+| onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages from the database matching the pagination parameters. With `after` set to true, `cursorMessageId` should be excluded, whereas with after set to false, it should be included. This is so that there's a way to look up just one message (in case it changed). The library creates or updates the participant activity if a message newer than the one specified in `lastReadMessageCreatedAt` (which is cached at runtime) is fetched.
 | onReadInvites(handler: function) | participantId: string | invites: Invite[] | Should return all invites created by or created for the provided participant. |
 | onReadAliases(handler: function) | participants: string[] | aliases: Alias[] | Should return all aliases for the provided participant IDs. In a simple implementation, this can look up the usernames from an existing users table. |
 | onReadIndicators(handler: function) | conversationId: string | indicators: Indicator[] | Should return all typing indicators for a conversation. |
+| onReadConversationParticipantActivity(handler: function) | conversationId: string, participantId: string | participantActivity: ParticipantActivity | null | Should return the participant activity from the database or `null` if it does not exist. |
 
 **Update handlers:**
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
 | onUpdateConversation(handler: function) | conversation: Conversation | - | Should update the provided conversation in the database. |
 | onUpdateMessage(handler: function) | message: Message | - | Should update the provided message in the database. The `modifiedAt` field is automatically adjusted by the library if the update is an edit. |
+| onUpdateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | - | Should update the provided participant activity in the database. |
 
 **Delete handlers:**
 | Method | Calls with | Expected return value | Description |
@@ -143,9 +145,10 @@ A function that takes `data: Uint8Array` and pushes it to the client, where it i
 | onDeleteConversation(handler: function) | conversationId: string | - | Should delete the specified conversation in the database. |
 | onDeleteMessage(handler: function) | messageId: string | - | Should delete the specified message in the database. |
 | onDeleteReaction(handler: function) | reactionId: string | - | Should delete the specified reaction in the database. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
-| onDeleteInvites(handler: function) | invites: Invite[] | - | Should delete the provided invites in the database. |
+| onDeleteInvites(handler: function) | inviteIds: string[] | - | Should delete the provided invites in the database. |
 | onDeleteExpiredIndicators(handler: function) | - | - | Should delete all entries older than 3s, measured by the `createdAt` field. The library calls this every `indicatorCleanupInterval` seconds. |
 | onDeleteIndicator(handler: function) | indicatorId: string | - | Should delete the specific indicator. |
+| onDeleteConversationParticipantActivities(handler: function) |  conversationIds: string[], participantIds: string[] | - | Should delete all matching activities. Multiple participants are provided when a conversation gets deleted, multiple conversations are provided when a participant leaves (potentially through propagation of `deleteParticipant`). |
 
 **Validation handlers:**
 | Method | Calls with | Expected return value | Description |
@@ -157,7 +160,7 @@ A function that takes `data: Uint8Array` and pushes it to the client, where it i
 ### Suggested database tables
 
 The `hc` prefix stands for headless-chat. It's suggested to use the following tables:
-`hc_conversations` `hc_messages`, `hc_indicators`, `hc_reactions`, `hc_invites` and, if aliases are configurable, `hc_aliases`. Ensure proper indexing.
+`hc_conversations`, `hc_participant_activities`, `hc_messages`, `hc_indicators`, `hc_reactions`, `hc_invites` and, if aliases are configurable, `hc_aliases`. Ensure proper indexing.
 
 It's suggested that messages have a foreign key to the referenced conversations entry with deletion propagation, and that reactions have a foreign key to the referenced messages entry with deletion propagation.
 
@@ -177,7 +180,9 @@ All IDs are defined as strings so that you can integrate it in any existing sche
     conversationId: string,
     participants: string[], // Participant IDs
     createdAt: Date,
-    lastActivityAt: Date, // Conversations are usually ordered by this
+    lastActivityAt: Date, // Conversations are usually ordered by this; not participant specific
+    lastMessage: Message | null, // Can be null if the conversation has no messages yet
+    participantActivity: ParticipantActivity, // Participant-specific
 }
 ```
 
@@ -231,9 +236,21 @@ All IDs are defined as strings so that you can integrate it in any existing sche
 }
 ```
 
+#### ParticipantActivity
+
+```ts
+{
+    conversationId: string, // The conversationId + participantId should be unique in the database (unique index)
+    participantId: string,
+    lastReadMessageId: string | null, // Can be null if the participant has not read any messages yet
+    lastReadMessageCreatedAt: Date | null, // Creation date of the message (not read date)
+}
+```
+
 #### Alias
 
-Since different participants might have different aliases for participants, clients should get the corresponding alias once for each new participant. This avoids looking up the alias for each participant for every participant a message is fanned-out to, which would put heavy load on a database.
+Since different participants might have different aliases for participants, clients should get the corresponding alias once for each new participant. 
+This avoids looking up the alias for each participant for every participant a message is fanned-out to, which would put heavy load on a database.
 
 ```ts
 {
