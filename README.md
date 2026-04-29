@@ -65,17 +65,19 @@ A function that takes no parameters and returns `customAuthData: any` that is se
 > [!NOTE]
 > Errors thrown by handlers will be suppressed.
 
+Most event methods are async because the server needs to be informed that it should start or stop pushing updates about this topic to the client. Only errors are always sent. For applications, this means that unsubscribing from all handlers for e.g. conversations, messages and typing indicators substantially lowers the work the server has to do, but also means that after subscribing to an event, there's a brief delay for events to actually start flowing in and the same goes for unsubscribing, where there's a brief delay for events to stop arriving.
+
 **Events:**
 | Method | Calls with | Description |
 | ------ | ----------- | ----------- |
-| onMessage(conversationId: string, handler: function) | message: Message | Subscribe to messages from a conversation. Note that this also fires for already existing messages when they are updated (e.g. with new reactions) or marked as deleted. |
-| offMessage(handler: function) | - | Unsubscribe a handler. |
-| onIndicators(conversationId: string, handler: function) | indicators: Indicator[] | Subscribe to typing indicators for a conversation. |
-| offIndicators(handler: function) | - | Unsubscribe a handler. |
-| onConversations(handler: function) | conversations: Conversation[] | Subscribe to receive updates when conversations are created, modified or deleted. |
-| offConversations(handler: function) | - | Unsubscribe a handler. |
-| onInvites(handler: function) | invites: Invite[] | Subscribe to receive new invites and updates or deletions of existing ones. |
-| offInvites(handler: function) | - | Unsubscribe a handler. |
+| async onMessage(conversationId: string, handler: function) | message: Message | Subscribe to messages from a conversation. Note that this also fires for already existing messages when they are updated (e.g. with new reactions) or marked as deleted. |
+| async offMessage(handler: function) | - | Unsubscribe a handler. |
+| async onIndicators(conversationId: string, handler: function) | indicators: Indicator[] | Subscribe to typing indicators for a conversation. |
+| async offIndicators(handler: function) | - | Unsubscribe a handler. |
+| async onConversations(handler: function) | conversations: Conversation[] | Subscribe to receive updates when conversations are created, modified or deleted. |
+| async offConversations(handler: function) | - | Unsubscribe a handler. |
+| async onInvites(handler: function) | invites: Invite[] | Subscribe to receive new invites and updates or deletions of existing ones. |
+| async offInvites(handler: function) | - | Unsubscribe a handler. |
 | onError(handler: function) | error: string | Subscribe to server-originated errors (e.g. failed to send message). |
 | offError(handler: function) | - | Unsubscribe a handler. |
 
