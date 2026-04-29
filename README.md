@@ -65,7 +65,10 @@ A function that takes no parameters and returns `customAuthData: any` that is se
 > [!NOTE]
 > Errors thrown by handlers will be suppressed.
 
-Most event methods are async because the server needs to be informed that it should start or stop pushing updates about this topic to the client. Only errors are always sent. For applications, this means that unsubscribing from all handlers for e.g. conversations, messages and typing indicators substantially lowers the work the server has to do, but also means that after subscribing to an event, there's a brief delay for events to actually start flowing in and the same goes for unsubscribing, where there's a brief delay for events to stop arriving.
+Most event methods are async because the server needs to be informed that it should start or stop pushing updates about this topic to the client. Only errors are always sent. For applications, this means that unsubscribing from all handlers for e.g. conversations, messages and typing indicators substantially lowers the work the server has to do, but also means that after subscribing to an event, there's a brief delay for events to actually start flowing in and the same goes for unsubscribing, where there's a brief delay for events to stop arriving. Subscribing is idempotent — calling the same `on*` method twice for the same scope is safe and results in a single server-side subscription.
+
+> [!IMPORTANT]
+> When the underlying transport disconnects and reconnects, the consumer should re-subscribe to all relevant events and re-fetch state via the appropriate getters (e.g. `getConversations`, `getMessages`). Subscribe before fetching to avoid missing events that arrive between the two calls. The consumer should also call `cleanupParticipant` on the server side for participants whose transport has dropped, so the server stops attempting to push to them.
 
 **Events:**
 | Method | Calls with | Description |
@@ -129,6 +132,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
 | deleteParticipant(participantId: string) | - | When a user is deleted in your backend, call this method. It will remove the participant from all conversations. Note that messages will continue to exist which is intended. You can show them as "from deleted user" or whatever you return for the alias. |
+| cleanupParticipant(participantId: string) | - | Drops all server-side subscriptions for the participant. Call this when the consumer's transport detects a disconnect (e.g. via its own ping/pong or close event) so the server stops attempting to dispatch to them. The participant can resubscribe normally on reconnect. |
 | acceptInvite(inviteId: string) | - | Can be used for auto-accepting invites on behalf of participants, e.g. for participants that are already connected in your own system. For auto-declining, throwing inside the creation handler is the intended solution. |
 
 **Create handlers:**
