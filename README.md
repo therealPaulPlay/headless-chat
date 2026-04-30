@@ -2,9 +2,9 @@
 
 Slightly opinionated core chat logic. No database implementation, no transport implementation, and no UI – you are responsible for wiring it up. Use this if you need...
 
-- A simple API
-- Chat logic that works like you'd expect
-- Something that works with your DB
+- A simple to integrate API
+- Robust chat logic with reactions, replies, typing indicators & more
+- Something that works with your own DB
 - Freedom to choose your protocol (WS & SSE recommended)
 - Sanitization handled for you
 
@@ -24,7 +24,7 @@ A function that takes `data: Uint8Array` and sends it to the server, where it is
 
 #### GetAuthData
 
-A function that takes no parameters and returns `customAuthData: any` that is sent to the server and used inside `onParticipantAuth` to verify that this participant is authorized as the provided participant ID.
+A function that takes no parameters and returns `authData: unknown` that is sent to the server and used inside `onParticipantAuth` to verify that this participant is authorized as the provided participant ID.
 
 ### Methods
 
@@ -183,7 +183,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 **Validation handlers:**
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
-| onParticipantAuth(handler: function) | participantId: string, customAuthData: any | allow: boolean | Integrate a simple auth check. |
+| onParticipantAuth(handler: function) | participantId: string, authData: unknown | allow: boolean | Integrate a simple auth check. |
 | onProfanityCheckCensor(handler: function) (optional) | message: string | censoredMessage: string | Normal profanity check where profane words are censored. Must return the (possibly censored) string and must not throw. |
 | onProfanityCheckBlock(handler: function) (optional) | message: string | allow: boolean | Strict profanity check where messages that contain profanity are rejected. Must return a boolean and must not throw. |
 
