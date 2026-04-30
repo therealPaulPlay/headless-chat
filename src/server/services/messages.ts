@@ -19,7 +19,7 @@ async function persistAndFanoutMessage(ctx: ServerContext, message: Message): Pr
     if (conversation) ctx.subscriptions.broadcastConversation(conversation);
 }
 
-function buildMessage(participantId: string, conversationId: string, text: string, options: MessageOptions, systemEvent: SystemEvent | null): Message {
+function buildMessage(participantId: string, conversationId: string, text: string, options: MessageOptions | undefined, systemEvent: SystemEvent | null): Message {
     return {
         messageId: newId(),
         conversationId,
@@ -34,7 +34,7 @@ function buildMessage(participantId: string, conversationId: string, text: strin
     };
 }
 
-export async function sendMessage(ctx: ServerContext, participantId: string, conversationId: string, text: string, options: MessageOptions): Promise<string> {
+export async function sendMessage(ctx: ServerContext, participantId: string, conversationId: string, text: string, options?: MessageOptions): Promise<string> {
     if (typeof text !== "string" || text.length === 0) throw new Error("Message must be a non-empty string");
     ctx.rateLimiter.trackMessage(participantId);
     const finalText = await applyProfanityChecks(ctx.handlers, text);
@@ -47,7 +47,7 @@ export async function sendMessage(ctx: ServerContext, participantId: string, con
     return message.messageId;
 }
 
-export async function editMessage(ctx: ServerContext, participantId: string, messageId: string, text: string, options: MessageOptions): Promise<void> {
+export async function editMessage(ctx: ServerContext, participantId: string, messageId: string, text: string): Promise<void> {
     if (typeof text !== "string" || text.length === 0) throw new Error("Message must be a non-empty string");
     ctx.rateLimiter.trackMessage(participantId);
     const finalText = await applyProfanityChecks(ctx.handlers, text);
@@ -58,10 +58,10 @@ export async function editMessage(ctx: ServerContext, participantId: string, mes
     if (existing.deleted) throw new Error("Cannot edit deleted message");
     if (existing.systemEvent) throw new Error("Cannot edit a system message");
 
+    // Options can only be set in send and are immutable across edits
     const updated: Message = {
         ...existing,
         message: finalText,
-        messageOptions: normalizeOptions(options),
         modifiedAt: now(),
     };
     await getHandler(ctx.handlers, "updateMessage")(updated);
@@ -105,7 +105,7 @@ export async function removeReaction(ctx: ServerContext, participantId: string, 
     await ctx.subscriptions.broadcastMessageById(reaction.messageId);
 }
 
-export async function addMessage(ctx: ServerContext, conversationId: string, participantId: string, text: string, options: MessageOptions, systemEvent?: SystemEvent): Promise<string> {
+export async function addMessage(ctx: ServerContext, conversationId: string, participantId: string, text: string, options?: MessageOptions, systemEvent?: SystemEvent): Promise<string> {
     // Server-side path, bypasses rate limit + profanity check
     const message = buildMessage(participantId, conversationId, text, options, systemEvent ?? null);
     await persistAndFanoutMessage(ctx, message);

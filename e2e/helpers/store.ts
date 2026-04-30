@@ -1,0 +1,223 @@
+import type { Server } from "../../src/server/server.js";
+import type { Conversation, ConversationRecord, Indicator, Invite, Message, ParticipantActivity, Reaction, Alias } from "../../src/shared/shared-types.js";
+
+// Tiny in-memory faux-DB that implements all the handlers the lib expects
+// Mirrors what a consumer would do with SQL but using maps and arrays
+export class InMemoryStore {
+    users = new Set<string>();
+    conversations = new Map<string, ConversationRecord>();
+    messages = new Map<string, Message>();
+    reactions = new Map<string, Reaction>();
+    indicators: Indicator[] = [];
+    invites: Invite[] = [];
+    activities = new Map<string, ParticipantActivity>(); // key: conversationId|participantId
+    aliases = new Map<string, string>(); // participantId -> alias
+
+    private activityKey(conversationId: string, participantId: string): string {
+        return `${conversationId}|${participantId}`;
+    }
+
+    private surfaceConversation(record: ConversationRecord): Conversation {
+        const messagesIn = [...this.messages.values()].filter(m => m.conversationId === record.conversationId);
+        const lastMessage = messagesIn.length === 0 ? null : messagesIn.reduce((a, b) => a.createdAt.getTime() > b.createdAt.getTime() ? a : b);
+        return { ...record, lastMessage };
+    }
+
+    private isParticipant(conversationId: string, participantId: string): boolean {
+        return this.conversations.get(conversationId)?.participants.includes(participantId) ?? false;
+    }
+
+    register(server: Server): void {
+        
+        // Create handlers -------------------------------------------------------------------
+        
+        server.onCreateConversation(record => { this.conversations.set(record.conversationId, { ...record }); });
+        server.onCreateMessage(message => {
+            // Participation guard
+            if (!message.systemEvent && !this.isParticipant(message.conversationId, message.participantId)) {
+                throw new Error("Not a participant of this conversation");
+            }
+            this.messages.set(message.messageId, { ...message, reactions: [] });
+        });
+        server.onCreateReaction(reaction => {
+            const message = this.messages.get(reaction.messageId);
+            if (!message) throw new Error("Message not found");
+            if (!this.isParticipant(message.conversationId, reaction.participantId)) throw new Error("Not a participant");
+            // Dedup on (messageId, participantId)
+            if (message.reactions.find(r => r.participantId === reaction.participantId && r.content === reaction.content)) return;
+            message.reactions.push({ ...reaction });
+        });
+        server.onCreateInvite(invite => {
+            const conversationId = invite.conversation.conversationId;
+            
+            // Ensure both participants exist as users
+            if (!this.users.has(invite.fromParticipantId) || !this.users.has(invite.toParticipantId)) {
+                throw new Error("Participant does not exist");
+            }
+            
+            // Check if already a participant of this conversation
+            if (this.isParticipant(conversationId, invite.toParticipantId)) throw new Error("Already a participant");
+            
+            // Dedup
+            const existing = this.invites.find(i => i.conversation.conversationId === conversationId && i.toParticipantId === invite.toParticipantId);
+            if (existing) return;
+            this.invites.push({ ...invite });
+        });
+        server.onCreateIndicator(indicator => {
+            if (!this.isParticipant(indicator.conversationId, indicator.participantId)) throw new Error("Not a participant");
+            // Upsert by (conversationId, participantId)
+            this.indicators = this.indicators.filter(i => !(i.conversationId === indicator.conversationId && i.participantId === indicator.participantId));
+            this.indicators.push({ ...indicator });
+        });
+        server.onCreateConversationParticipantActivity(activity => {
+            if (!this.isParticipant(activity.conversationId, activity.participantId)) return;
+            this.activities.set(this.activityKey(activity.conversationId, activity.participantId), { ...activity });
+        });
+
+        // Read handlers -----------------------------------------------------------
+        
+        server.onReadConversations(participantId => {
+            return [...this.conversations.values()]
+                .filter(c => c.participants.includes(participantId))
+                .map(c => this.surfaceConversation(c));
+        });
+        server.onReadConversation(conversationId => {
+            const record = this.conversations.get(conversationId);
+            return record ? this.surfaceConversation(record) : null;
+        });
+        server.onReadMessages((conversationId, cursorMessageId, after, amount) => {
+            // All messages of the conversation, sorted oldest -> newest
+            const all = [...this.messages.values()]
+                .filter(m => m.conversationId === conversationId)
+                .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+
+            // Null cursor returns the newest page; remaining = anything older
+            if (cursorMessageId === null) {
+                const pool = all.slice(-amount);
+                return { messages: pool, remainingInDirection: Math.max(0, all.length - pool.length) };
+            }
+
+            // Locate the cursor in the sorted list
+            const cursorIdx = all.findIndex(m => m.messageId === cursorMessageId);
+            if (cursorIdx === -1) return { messages: [], remainingInDirection: 0 };
+
+            // The cursor message is never included in the result
+            if (after) {
+                // Strictly newer - remaining = newer beyond what we returned
+                const pool = all.slice(cursorIdx + 1, cursorIdx + 1 + amount);
+                const consumedTo = cursorIdx + 1 + pool.length;
+                return { messages: pool, remainingInDirection: Math.max(0, all.length - consumedTo) };
+            }
+
+            // Strictly older - remaining = older beyond what we returned
+            const start = Math.max(0, cursorIdx - amount);
+            const pool = all.slice(start, cursorIdx);
+            return { messages: pool, remainingInDirection: start };
+        });
+        server.onReadMessage(messageId => {
+            const message = this.messages.get(messageId);
+            return message ? { ...message, reactions: [...message.reactions] } : null;
+        });
+        server.onReadReaction(reactionId => {
+            for (const message of this.messages.values()) {
+                const reaction = message.reactions.find(r => r.reactionId === reactionId);
+                if (reaction) return { ...reaction };
+            }
+            return null;
+        });
+        server.onReadInvites(participantId => {
+            return this.invites
+                .filter(i => i.fromParticipantId === participantId || i.toParticipantId === participantId)
+                .map(i => ({ ...i }));
+        });
+        server.onReadInvite((conversationId, toParticipantId) => {
+            const found = this.invites.find(i => i.conversation.conversationId === conversationId && i.toParticipantId === toParticipantId);
+            return found ? { ...found } : null;
+        });
+        server.onReadAliases(participantIds => {
+            return participantIds.flatMap(pid => {
+                const alias = this.aliases.get(pid);
+                return alias ? [{ participantId: pid, alias }] : [];
+            });
+        });
+        server.onReadIndicators(conversationId => this.indicators.filter(i => i.conversationId === conversationId).map(i => ({ ...i })));
+        server.onReadConversationParticipantActivity((conversationId, participantId) => {
+            const found = this.activities.get(this.activityKey(conversationId, participantId));
+            return found ? { ...found } : null;
+        });
+        server.onReadParticipantActivities(participantId => {
+            return [...this.activities.values()].filter(a => a.participantId === participantId).map(a => ({ ...a }));
+        });
+
+        // Update handlers -----------------------------------------------
+        
+        server.onAddConversationParticipant((conversationId, participantId, maxParticipants) => {
+            const record = this.conversations.get(conversationId);
+            if (!record) throw new Error("Conversation not found");
+            if (record.participants.includes(participantId)) throw new Error("Already a participant");
+            if (record.participants.length >= maxParticipants) throw new Error("Conversation is full");
+            record.participants = [...record.participants, participantId];
+        });
+        server.onRemoveConversationParticipant((conversationId, participantId) => {
+            const record = this.conversations.get(conversationId);
+            if (!record) return;
+            record.participants = record.participants.filter(p => p !== participantId);
+        });
+        server.onUpdateMessage(message => {
+            const existing = this.messages.get(message.messageId);
+            if (!existing) throw new Error("Message not found");
+            // Spec: existing reactions are preserved across edits
+            this.messages.set(message.messageId, { ...message, reactions: existing.reactions });
+        });
+        server.onUpdateConversationParticipantActivity(activity => {
+            if (!this.isParticipant(activity.conversationId, activity.participantId)) return;
+            this.activities.set(this.activityKey(activity.conversationId, activity.participantId), { ...activity });
+        });
+
+        // Delete handlers ----------------------------------------------------
+        
+        server.onDeleteReaction(reactionId => {
+            for (const message of this.messages.values()) {
+                const idx = message.reactions.findIndex(r => r.reactionId === reactionId);
+                if (idx >= 0) { message.reactions.splice(idx, 1); return; }
+            }
+        });
+        server.onDeleteConversationWithMessagesAndReactions(conversationId => {
+            for (const [id, m] of this.messages) if (m.conversationId === conversationId) this.messages.delete(id);
+            this.conversations.delete(conversationId);
+        });
+        server.onDeleteInvites(invites => {
+            this.invites = this.invites.filter(existing => !invites.some(target => target.conversationId === existing.conversation.conversationId && target.toParticipantId === existing.toParticipantId));
+        });
+        server.onDeleteIndicatorsBefore(thresholdDate => {
+            this.indicators = this.indicators.filter(i => i.createdAt.getTime() >= thresholdDate.getTime());
+        });
+        server.onDeleteIndicator((conversationId, participantId) => {
+            this.indicators = this.indicators.filter(i => !(i.conversationId === conversationId && i.participantId === participantId));
+        });
+        server.onDeleteConversationParticipantActivities((conversationIds, participantIds) => {
+            for (const key of [...this.activities.keys()]) {
+                const activity = this.activities.get(key);
+                if (!activity) continue;
+                if (conversationIds.includes(activity.conversationId) && participantIds.includes(activity.participantId)) {
+                    this.activities.delete(key);
+                }
+            }
+        });
+        server.onDeleteMessagesBefore(thresholdDate => {
+            for (const [id, m] of this.messages) if (m.createdAt.getTime() < thresholdDate.getTime()) this.messages.delete(id);
+        });
+        server.onDeleteInactiveConversationsBefore(thresholdDate => {
+            for (const [id, c] of this.conversations) if (c.lastActivityAt.getTime() < thresholdDate.getTime()) this.conversations.delete(id);
+        });
+        server.onDeleteInvitesBefore(thresholdDate => {
+            this.invites = this.invites.filter(i => i.createdAt.getTime() >= thresholdDate.getTime());
+        });
+
+        // Validation handlers ------------------------------------------------
+        
+        server.onParticipantAuth((participantId, authData) => {
+            return authData === `token-${participantId}`;
+        });
+    }
+}

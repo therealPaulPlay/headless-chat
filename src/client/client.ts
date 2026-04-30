@@ -137,11 +137,11 @@ export class Client {
 
     // RPC: messages ------------------------------------------------------
 
-    sendMessage(conversationId: string, message: string, options: MessageOptions): Promise<string> {
+    sendMessage(conversationId: string, message: string, options?: MessageOptions): Promise<string> {
         return this.request<string>("sendMessage", [conversationId, message, options]);
     }
-    editMessage(messageId: string, message: string, options: MessageOptions): Promise<void> {
-        return this.request<void>("editMessage", [messageId, message, options]);
+    editMessage(messageId: string, message: string): Promise<void> {
+        return this.request<void>("editMessage", [messageId, message]);
     }
     deleteMessage(messageId: string): Promise<void> {
         return this.request<void>("deleteMessage", [messageId]);

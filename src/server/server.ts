@@ -166,7 +166,7 @@ export class Server {
             case "setIndicator": return indicatorsService.setIndicator(this.ctx, participantId, args[0] as string);
             case "removeIndicator": return indicatorsService.removeIndicator(this.ctx, participantId, args[0] as string);
             case "sendMessage": return messagesService.sendMessage(this.ctx, participantId, args[0] as string, args[1] as string, args[2] as MessageOptions);
-            case "editMessage": return messagesService.editMessage(this.ctx, participantId, args[0] as string, args[1] as string, args[2] as MessageOptions);
+            case "editMessage": return messagesService.editMessage(this.ctx, participantId, args[0] as string, args[1] as string);
             case "deleteMessage": return messagesService.deleteMessage(this.ctx, participantId, args[0] as string);
             case "addReaction": return messagesService.addReaction(this.ctx, participantId, args[0] as string, args[1] as string);
             case "removeReaction": return messagesService.removeReaction(this.ctx, participantId, args[0] as string);

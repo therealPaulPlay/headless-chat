@@ -48,8 +48,8 @@ A function that takes no parameters and returns `authData: unknown` that is sent
 **Messages:**
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
-| async sendMessage(conversationId: string, message: string, options: MessageOptions) | messageId: string | Send a message. |
-| async editMessage(messageId: string, message: string, options: MessageOptions) | - | Edit a message. |
+| async sendMessage(conversationId: string, message: string, options?: MessageOptions) | messageId: string | Send a message. |
+| async editMessage(messageId: string, message: string) | - | Edit a message's text. |
 | async deleteMessage(messageId: string) | - | Delete a message. |
 | async addReaction(messageId: string, reaction: string) | reactionId: string | Add a reaction (valid unicode emoji) to a message. Deduplication is automatically handled by the server, participants can only add one. |
 | async removeReaction(reactionId: string) | - | Remove a reaction from a message. |
@@ -58,7 +58,7 @@ A function that takes no parameters and returns `authData: unknown` that is sent
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
 | async getConversations(participantId: string) | conversations: Conversation[] | Get all conversations the participant is in. |
-| async getMessages(conversationId: string, cursorMessageId: `string | null`, after: boolean, amount: number) | { messages: Message[], remainingInDirection: number } | Get messages in a paginated way where one message serves as the cursor and you can get `amount` messages from before or after it. If the cursor is null, the newest messages will be returned. |
+| async getMessages(conversationId: string, cursorMessageId: `string | null`, after: boolean, amount: number) | { messages: Message[], remainingInDirection: number } | Get up to `amount` messages strictly newer (`after: true`) or strictly older (`after: false`) than the cursor. The cursor message itself is never included. A null cursor returns the newest page. |
 | async getInvites(participantId: string) | invites: Invite[]| Get all invites, both for you and by you. |
 | async getAliases([participantId: string, participantId...]) | aliases: Alias[] | Get server-defined aliases for participants. This serves as a simple lookup for your server-defined username system. |
 | async getParticipantActivities() | activities: ParticipantActivity[] | Get the calling participant's read state across all their conversations. Used to derive unread counts client-side. |
@@ -152,7 +152,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | ------ | ---------- | --------------------- | ------------|
 | onReadConversations(handler: function) | participantId: string | conversations: Conversation[] | Should return all conversations from the database that a given participant takes part in, with `lastMessage` populated via a join. |
 | onReadConversation(handler: function) | conversationId: string | `conversation: Conversation | null` | Should return the conversation by ID with `lastMessage` populated, or `null` if it does not exist. |
-| onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages from the database matching the pagination parameters, each with its `reactions` array populated. With `after` set to true, `cursorMessageId` should be excluded, whereas with after set to false, it should be included. The library creates or updates the participant activity if a message newer than the one specified in `lastReadMessageCreatedAt` (cached at runtime) is fetched.
+| onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages, each with its `reactions` array populated. The cursor message is never included. With `after: true` return strictly newer, with `after: false` strictly older. The library creates or updates the participant activity if a message newer than the one specified in `lastReadMessageCreatedAt` (cached at runtime) is fetched.
 | onReadMessage(handler: function) | messageId: string | `message: Message | null` | Should return the message by ID with reactions populated, or null. |
 | onReadReaction(handler: function) | reactionId: string | `reaction: Reaction | null` | Should return the reaction by ID, or null. |
 | onReadInvites(handler: function) | participantId: string | invites: Invite[] | Should return all invites created by or created for the provided participant. |
