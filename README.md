@@ -128,10 +128,10 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 **Admin:**
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
-| deleteParticipant(participantId: string) | - | When a user is deleted in your backend, call this method after (important) removing the user from your own table. Removes the participant from all conversations and deletes their invites while messages are intentinonally kept around. |
+| deleteParticipant(participantId: string) | - | When a user is deleted in your backend, call this method after removing the user from your own table. Removes the participant from all conversations and deletes their invites while messages are kept around. |
 | cleanupParticipant(participantId: string) | - | Drops all server-side subscriptions for the participant. Call this when your transport solution detects a disconnect (e.g. via its own ping/pong or close event) so the server stops attempting to dispatch to them. The participant can resubscribe normally on reconnect. |
-| acceptInvite(conversationId: string, participantId: string) | - | Can be used for auto-accepting invites on behalf of participants, e.g. for participants that are already connected in your own system. For auto-declining, throwing inside the creation handler is the intended solution. |
-| addMessage(conversationId: string, participantId: string, message: string, options: MessageOptions, systemEvent?: SystemEvent) | messageId: string | Post a message on behalf of a participant or post a system message. Bypasses rate limits and profanity checks. The library auto-posts join/leave system messages on accept/leave. |
+| acceptInvite(conversationId: string, participantId: string) | - | Can be used for auto-accepting invites on behalf of participants, e.g. for participants that are already connected in your own system. |
+| addMessage(conversationId: string, participantId: string, message: string, options: MessageOptions, systemEvent?: SystemEvent) | messageId: string | Post a message on behalf of a participant or post a system message. Bypasses checks. |
 | stop() | - | Stop all internal timers (indicator cleanup, daily cleanup, rate-limit sweep). |
 
 **Create handlers:**
