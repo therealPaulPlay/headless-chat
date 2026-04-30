@@ -134,6 +134,9 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | addMessage(conversationId: string, participantId: string, message: string, options: MessageOptions, systemEvent?: SystemEvent) | messageId: string | Post a message on behalf of a participant or post a system message. Bypasses checks. |
 | stop() | - | Stop all internal timers (indicator cleanup, daily cleanup, rate-limit sweep). |
 
+> [!IMPORTANT]
+> Every handler listed below except the ones marked optional must be registered. The library calls them as required and will throw at runtime if any are missing.
+
 **Create handlers:**
 | Method | Calls with | Description |
 | ------ | ---------- | ------------|
