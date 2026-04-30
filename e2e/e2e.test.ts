@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import type { Conversation, Indicator, Invite, Message } from "../src/shared/shared-types.js";
 import { FakeTransport, tick } from "./helpers/wire.js";
 
@@ -8,7 +8,7 @@ describe("e2e", () => {
     beforeEach(() => { transport = new FakeTransport(); });
     afterEach(() => { transport.stop(); });
 
-    it("invite -> accept -> send message -> receive via onMessage", async () => {
+    test("invite -> accept -> send message -> receive via onMessage", async () => {
         const alice = transport.addClient("alice");
         const bob = transport.addClient("bob");
         const conversationId = await alice.createConversation();
@@ -28,7 +28,7 @@ describe("e2e", () => {
         expect(real[0]?.participantId).toBe("alice");
     });
 
-    it("onConversation fires for both participants on create + join", async () => {
+    test("onConversation fires for both participants on create + join", async () => {
         const alice = transport.addClient("alice");
         const bob = transport.addClient("bob");
 
@@ -62,7 +62,7 @@ describe("e2e", () => {
         expect(aliceMessages.some(m => m.systemEvent?.type === "participantJoined" && m.systemEvent.participantId === "bob")).toBe(true);
     });
 
-    it("edit + delete a message broadcasts updates", async () => {
+    test("edit + delete a message broadcasts updates", async () => {
         const alice = transport.addClient("alice");
         const bob = transport.addClient("bob");
         const conversationId = await alice.createConversation();
@@ -82,7 +82,7 @@ describe("e2e", () => {
         expect(forMessage.some(m => m.message === "edited" && m.modifiedAt !== null)).toBe(true);
     });
 
-    it("addReaction + removeReaction re-broadcasts the message", async () => {
+    test("addReaction + removeReaction re-broadcasts the message", async () => {
         const alice = transport.addClient("alice");
         const bob = transport.addClient("bob");
         const conversationId = await alice.createConversation();
@@ -107,7 +107,7 @@ describe("e2e", () => {
         expect(afterRemove?.reactions).toHaveLength(0);
     });
 
-    it("setIndicator broadcasts to subscribers", async () => {
+    test("setIndicator broadcasts to subscribers", async () => {
         const alice = transport.addClient("alice");
         const bob = transport.addClient("bob");
         const conversationId = await alice.createConversation();
@@ -125,14 +125,14 @@ describe("e2e", () => {
         expect(last?.some(i => i.participantId === "alice")).toBe(true);
     });
 
-    it("auth rejection rejects the RPC", async () => {
+    test("auth rejection rejects the RPC", async () => {
         const alice = transport.addClient("alice");
         // Force bad auth on next request
         (alice as unknown as { getAuthData: () => unknown }).getAuthData = () => "wrong-token";
         await expect(alice.createConversation()).rejects.toThrow(/Unauthorized/);
     });
 
-    it("leaveConversation posts a system message, cleans up activity, and deletes empty conversations", async () => {
+    test("leaveConversation posts a system message, cleans up activity, and deletes empty conversations", async () => {
         const alice = transport.addClient("alice");
         const bob = transport.addClient("bob");
         const conversationId = await alice.createConversation();
@@ -171,7 +171,7 @@ describe("e2e", () => {
         expect(conversationEvents.some(e => e.conversationId === conversationId && e.data === null)).toBe(true);
     });
 
-    it("rate limits message sends", async () => {
+    test("rate limits message sends", async () => {
         const tight = new FakeTransport({ messageLimitPerSecond: 2 });
         try {
             const alice = tight.addClient("alice");
