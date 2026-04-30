@@ -1,10 +1,13 @@
-export type Conversation = {
+export type ConversationRecord = {
     conversationId: string,
     participants: string[],
     createdAt: Date,
     lastActivityAt: Date,
+    maxSize: number | null,
+}
+
+export type Conversation = ConversationRecord & {
     lastMessage: Message | null,
-    participantActivity: ParticipantActivity,
 }
 
 export type Message = {
@@ -15,16 +18,22 @@ export type Message = {
     participantId: string,
     reactions: Reaction[],
     deleted: boolean,
+    systemEvent: SystemEvent | null,
     createdAt: Date,
     modifiedAt: Date | null,
 }
 
 export type MessageOptions = {
     referenceMessageId: string | null,
+    isForwarded: boolean,
+}
+
+export type SystemEvent = {
+    type: "participantJoined" | "participantLeft",
+    participantId: string,
 }
 
 export type Indicator = {
-    indicatorId: string,
     participantId: string,
     conversationId: string,
     createdAt: Date,
@@ -39,7 +48,6 @@ export type Reaction = {
 }
 
 export type Invite = {
-    inviteId: string,
     fromParticipantId: string,
     toParticipantId: string,
     conversation: Conversation,

@@ -37,19 +37,19 @@ A function that takes no parameters and returns `customAuthData: any` that is se
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
 | async createConversation(maxSize?: number) | conversationId: string | Create a conversation optionally with a maximum size (automatically enforced). |
-| async createInvite(conversationId: string, participantId: string) | inviteId: string | Invite a participant to a conversation. Deduplication is automatically handled by the server. |
-| async revokeInvite(inviteId: string) | - | Revoke an invitation. |
+| async createInvite(conversationId: string, participantId: string) | - | Invite a participant to a conversation. Deduplication is automatically handled by the server. |
+| async revokeInvite(conversationId: string, toParticipantId: string) | - | Revoke an invitation. |
 | async acceptInvite(conversationId: string) | - | Join a conversation from an invite. Deletes all invites for that conversation for this participant. |
 | async declineInvite(conversationId: string) | - | Decline and delete all invites for a conversation. |
 | async leaveConversation(conversationId: string) | - | Leave a conversation. The conversation will be deleted when all participants have left. |
-| async setIndicator(conversationId: string) | indicatorId: string | Set the typing indicator. Has a TTL defined in the handler, setting every X-1 seconds to avoid gaps/flicker is suggested. |
+| async setIndicator(conversationId: string) | - | Set the typing indicator. Has a TTL defined in the handler, setting every X-1 seconds to avoid gaps/flicker is suggested. |
 | async removeIndicator(conversationId: string) | - | Remove the typing indicator. Automatically, synchronously called when sending a message. |
 
 **Messages:**
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
 | async sendMessage(conversationId: string, message: string, options: MessageOptions) | messageId: string | Send a message. |
-| async editMessage(conversationId: string, messageId: string, message: string, options: MessageOptions) | - | Edit a message. |
+| async editMessage(messageId: string, message: string, options: MessageOptions) | - | Edit a message. |
 | async deleteMessage(messageId: string) | - | Delete a message. |
 | async addReaction(messageId: string, reaction: string) | reactionId: string | Add a reaction (valid unicode emoji) to a message. Deduplication is automatically handled by the server, participants can only add one. |
 | async removeReaction(reactionId: string) | - | Remove a reaction from a message. |
@@ -61,14 +61,15 @@ A function that takes no parameters and returns `customAuthData: any` that is se
 | async getMessages(conversationId: string, cursorMessageId: `string | null`, after: boolean, amount: number) | { messages: Message[], remainingInDirection: number } | Get messages in a paginated way where one message serves as the cursor and you can get `amount` messages from before or after it. If the cursor is null, the newest messages will be returned. |
 | async getInvites(participantId: string) | invites: Invite[]| Get all invites, both for you and by you. |
 | async getAliases([participantId: string, participantId...]) | aliases: Alias[] | Get server-defined aliases for participants. This serves as a simple lookup for your server-defined username system. |
+| async getParticipantActivities() | activities: ParticipantActivity[] | Get the calling participant's read state across all their conversations. Used to derive unread counts client-side. |
 
 > [!NOTE]
 > Errors thrown by handlers will be suppressed.
 
-Most event methods are async because the server needs to be informed that it should start or stop pushing updates about this topic to the client. Only errors are always sent. For applications, this means that unsubscribing from all handlers for e.g. conversations, messages and typing indicators substantially lowers the work the server has to do, but also means that after subscribing to an event, there's a brief delay for events to actually start flowing in and the same goes for unsubscribing, where there's a brief delay for events to stop arriving. Subscribing is idempotent — calling the same `on*` method twice for the same scope is safe and results in a single server-side subscription.
+Most event methods are async because the server needs to be informed that it should start or stop pushing updates about this topic to the client. For applications, this means that unsubscribing from all handlers for e.g. conversations, messages and typing indicators substantially lowers the work the server has to do, but also means that after subscribing to an event, there's a brief delay for events to actually start flowing in and the same goes for unsubscribing, where there's a brief delay for events to stop arriving. Subscribing is idempotent — calling the same `on*` method twice for the same scope is safe and results in a single server-side subscription.
 
 > [!IMPORTANT]
-> When the underlying transport disconnects and reconnects, the consumer should re-subscribe to all relevant events and re-fetch state via the appropriate getters (e.g. `getConversations`, `getMessages`). Subscribe before fetching to avoid missing events that arrive between the two calls. The consumer should also call `cleanupParticipant` on the server side for participants whose transport has dropped, so the server stops attempting to push to them.
+> When the underlying transport disconnects and reconnects, you should re-subscribe to all relevant events and re-fetch state via the appropriate getters (e.g. `getConversations`, `getMessages`). Subscribe before fetching to avoid missing events that arrive between the two calls. Also call `cleanupParticipant` on the server side for participants whose transport has dropped, so the server stops attempting to push to them.
 
 **Events:**
 | Method | Calls with | Description |
@@ -77,12 +78,10 @@ Most event methods are async because the server needs to be informed that it sho
 | async offMessage(handler: function) | - | Unsubscribe a handler. |
 | async onIndicators(conversationId: string, handler: function) | indicators: Indicator[] | Subscribe to typing indicators for a conversation. |
 | async offIndicators(handler: function) | - | Unsubscribe a handler. |
-| async onConversations(handler: function) | conversations: Conversation[] | Subscribe to receive updates when conversations are created, modified or deleted. |
-| async offConversations(handler: function) | - | Unsubscribe a handler. |
-| async onInvites(handler: function) | invites: Invite[] | Subscribe to receive new invites and updates or deletions of existing ones. |
-| async offInvites(handler: function) | - | Unsubscribe a handler. |
-| onError(handler: function) | error: string | Subscribe to server-originated errors (e.g. failed to send message). |
-| offError(handler: function) | - | Unsubscribe a handler. |
+| async onConversation(handler: function) | event: { conversationId: string, data: Conversation \| null } | Subscribe to per-conversation updates. `data: null` means the conversation was deleted. On subscribe, the server emits one event per existing conversation for hydration. |
+| async offConversation(handler: function) | - | Unsubscribe a handler. |
+| async onInvite(handler: function) | event: { conversationId: string, toParticipantId: string, data: Invite \| null } | Subscribe to per-invite updates. `data: null` means the invite was deleted. On subscribe, the server emits one event per existing invite for hydration. |
+| async offInvite(handler: function) | - | Unsubscribe a handler. |
 
 ## Server API
 
@@ -98,10 +97,10 @@ An object that configures the rate limiting of key actions the library handles.
 
 ```ts
 {
-    inviteLimitPerDay?: number, // Defaults to 50
     inviteLimitPerHour?: number, // Defaults to 10
     messageLimitPerSecond?: number, // Defaults to 5
     conversationParticipantLimit?: number, // Defaults to 100, acts as the hard global limit that takes precedence over maxSize
+    sweepIntervalSeconds?: number, // Defaults to 30, sweep that prunes per-participant rate limit state
 }
 ```
 
@@ -115,13 +114,14 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
     messageAfterDays?: number, // Defaults to null = disabled
     conversationAfterInactiveDays?: number, // Defaults to null = disabled, inactive means no new messages have been sent
     inviteAfterDays?: number, // Defaults to 7, can be set to null = disabled
+    activityCacheLifetimeMinutes?: number, // Period after which the participant-activity in-memory cache is (fully) cleared
 }
 ```
 
 ### Methods
 
 > [!TIP]
-> Handlers can, and should, throw an error if something goes wrong. The error will be sent to the client and can be displayed via `onError`.
+> Handlers can, and should, throw an error if something goes wrong. The error will reject the corresponding RPC promise on the client.
 
 **Transport:**
 | Method | Returns | Description |
@@ -131,19 +131,21 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 **Admin:**
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
-| deleteParticipant(participantId: string) | - | When a user is deleted in your backend, call this method. It will remove the participant from all conversations. Note that messages will continue to exist which is intended. You can show them as "from deleted user" or whatever you return for the alias. |
-| cleanupParticipant(participantId: string) | - | Drops all server-side subscriptions for the participant. Call this when the consumer's transport detects a disconnect (e.g. via its own ping/pong or close event) so the server stops attempting to dispatch to them. The participant can resubscribe normally on reconnect. |
-| acceptInvite(inviteId: string) | - | Can be used for auto-accepting invites on behalf of participants, e.g. for participants that are already connected in your own system. For auto-declining, throwing inside the creation handler is the intended solution. |
+| deleteParticipant(participantId: string) | - | When a user is deleted in your backend, call this method after (important) removing the user from your own table. Removes the participant from all conversations and deletes their invites while messages are intentinonally kept around. |
+| cleanupParticipant(participantId: string) | - | Drops all server-side subscriptions for the participant. Call this when your transport solution detects a disconnect (e.g. via its own ping/pong or close event) so the server stops attempting to dispatch to them. The participant can resubscribe normally on reconnect. |
+| acceptInvite(conversationId: string, participantId: string) | - | Can be used for auto-accepting invites on behalf of participants, e.g. for participants that are already connected in your own system. For auto-declining, throwing inside the creation handler is the intended solution. |
+| addMessage(conversationId: string, participantId: string, message: string, options: MessageOptions, systemEvent?: SystemEvent) | messageId: string | Post a message on behalf of a participant or post a system message. Bypasses rate limits and profanity checks. The library auto-posts join/leave system messages on accept/leave. |
+| stop() | - | Stop all internal timers (indicator cleanup, daily cleanup, rate-limit sweep). |
 
 **Create handlers:**
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
-| onCreateConversation(handler: function) | conversation: Conversation | - | Should create the provided conversation in the database. |
-| onCreateMessage(handler: function) | message: Message | - | Should create the provided message in the database. |
-| onCreateReaction(handler: function) | reaction: Reaction | - | Should create the provided reaction in the database. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
-| onCreateInvite(handler: function) | invite: Invite | - | Should create the provided invite in the database. |
-| onCreateIndicator(handler: function) | indicator: Indicator | - | Should create or re-create (if one already exists) a typing indicator. |
-| onCreateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | - | Should create a participant activity entry in the database. |
+| onCreateConversation(handler: function) | conversation: ConversationRecord | - | Should create the provided conversation in the database. |
+| onCreateMessage(handler: function) | message: Message | - | Should create the provided message in the database. Guard the insert with a participation check so a participant who concurrently left cannot post. |
+| onCreateReaction(handler: function) | reaction: Reaction | - | Should create the provided reaction in the database. Guard the insert with a participation check. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
+| onCreateInvite(handler: function) | invite: Invite | - | Atomically insert the invite, deduplicating on `(conversationId, toParticipantId)` (no-op on conflict). If the recipient is already a participant of the conversation, throw. The insert must verify that both `fromParticipantId` and `toParticipantId` exist in your users table (or wherever the referenced account is stored). |
+| onCreateIndicator(handler: function) | indicator: Indicator | - | Should create or re-create (if one already exists) a typing indicator. Guard the insert with a participation check. |
+| onCreateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | - | Should create a participant activity entry in the database. Guard the insert with a participation check so activity is not created for participants who concurrently left the conversation. |
 
 **Read handlers:**
 | Method | Calls with | Expected return value | Description |
@@ -151,34 +153,42 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onReadConversations(handler: function) | participantId: string | conversations: Conversation[] | Should return all conversations from the database that a given participant takes part in and include both the participant activity as well as the last message using a three-way database join. |
 | onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages from the database matching the pagination parameters. With `after` set to true, `cursorMessageId` should be excluded, whereas with after set to false, it should be included. The library creates or updates the participant activity if a message newer than the one specified in `lastReadMessageCreatedAt` (cached at runtime) is fetched.
 | onReadInvites(handler: function) | participantId: string | invites: Invite[] | Should return all invites created by or created for the provided participant. |
+| onReadInvite(handler: function) | conversationId: string, toParticipantId: string | `invite: Invite | null` | Should return the invite for the pair, or null. |
 | onReadAliases(handler: function) | participants: string[] | aliases: Alias[] | Should return all aliases for the provided participant IDs. In a simple implementation, this can look up the usernames from an existing users table. |
 | onReadIndicators(handler: function) | conversationId: string | indicators: Indicator[] | Should return all typing indicators for a conversation. |
 | onReadConversationParticipantActivity(handler: function) | conversationId: string, participantId: string | `participantActivity: ParticipantActivity | null` | Should return the participant activity from the database or `null` if it does not exist. |
+| onReadParticipantActivities(handler: function) | participantId: string | activities: ParticipantActivity[] | Should return all participant activity rows for the given participant. |
 
 **Update handlers:**
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
-| onUpdateConversation(handler: function) | conversation: Conversation | - | Should update the provided conversation in the database. |
+| onAddConversationParticipant(handler: function) | conversationId: string, participantId: string, maxParticipants: number | - | Should atomically add the participant only if the current count is below `maxParticipants` and the participant is not already in the conversation. Throw if either condition fails, use a transaction. |
+| onRemoveConversationParticipant(handler: function) | conversationId: string, participantId: string | - | Should atomically remove the participant. |
 | onUpdateMessage(handler: function) | message: Message | - | Should update the provided message in the database. The `modifiedAt` field is automatically adjusted by the library if the update is an edit. Existing reactions are preserved across edits. |
-| onUpdateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | - | Should update the provided participant activity in the database. |
+| onUpdateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | - | Should update the provided participant activity in the database. Guard the update with a participation check so activity is not written back for participants who concurrently left the conversation. |
 
 **Delete handlers:**
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
-| onDeleteMessageWithReactions(handler: function) | messageId: string | - | Should delete the specified message and all its reactions. Recommended to wrap in a single transaction: delete reactions by `messageId`, then delete the message by `messageId`. |
 | onDeleteReaction(handler: function) | reactionId: string | - | Should delete the specified reaction in the database. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
 | onDeleteConversationWithMessagesAndReactions(handler: function) | conversationId: string | - | Should delete the conversation, all its messages, and all reactions to those messages. Recommended to wrap in a single transaction with three statements: delete reactions joined to messages by `messageId` filtered by `conversationId`, then delete messages by `conversationId`, then delete the conversation by `conversationId`. |
-| onDeleteInvites(handler: function) | inviteIds: string[] | - | Should delete the provided invites in the database. |
-| onDeleteExpiredIndicators(handler: function) | - | - | Should delete all entries older than X-seconds (5s is recommended), measured by the `createdAt` field. The library calls this every `indicatorCleanupInterval` seconds. |
-| onDeleteIndicator(handler: function) | indicatorId: string | - | Should delete the specific indicator. |
+| onDeleteInvites(handler: function) | invites: { conversationId: string, toParticipantId: string }[] | - | Should delete the provided invites in the database. |
+| onDeleteIndicatorsBefore(handler: function) | thresholdDate: Date | - | Should delete all indicators whose `createdAt` is before `thresholdDate`. Called every `indicatorCleanupIntervalSeconds`. |
+| onDeleteIndicator(handler: function) | conversationId: string, participantId: string | - | Should delete the indicator for the given pair in a single statement. |
 | onDeleteConversationParticipantActivities(handler: function) |  conversationIds: string[], participantIds: string[] | - | Should delete all matching activities. Multiple participants are provided when a conversation gets deleted, multiple conversations are provided when a participant leaves (potentially through propagation of `deleteParticipant`). |
+| onDeleteMessagesBefore(handler: function) | thresholdDate: Date | - | Should delete all messages whose `createdAt` is before `thresholdDate`, plus their reactions. |
+| onDeleteInactiveConversationsBefore(handler: function) | thresholdDate: Date | - | Should delete all conversations whose `lastActivityAt` is before `thresholdDate`, plus their messages and reactions. |
+| onDeleteInvitesBefore(handler: function) | thresholdDate: Date | - | Should delete all invites whose `createdAt` is before `thresholdDate`. |
 
 **Validation handlers:**
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
 | onParticipantAuth(handler: function) | participantId: string, customAuthData: any | allow: boolean | Integrate a simple auth check. |
-| onProfanityCheckCensor(handler: function) (optional) | message: string | censoredMessage: string | Normal profanity check where profane words are censored. |
-| onProfanityCheckBlock(handler: function) (optional) | message: string | allow: boolean | Strict profanity check where messages that contain profanity are rejected. |
+| onProfanityCheckCensor(handler: function) (optional) | message: string | censoredMessage: string | Normal profanity check where profane words are censored. Must return the (possibly censored) string and must not throw. |
+| onProfanityCheckBlock(handler: function) (optional) | message: string | allow: boolean | Strict profanity check where messages that contain profanity are rejected. Must return a boolean and must not throw. |
+
+> [!NOTE]
+> Profanity handlers fail closed — if either throws, the message is rejected.
 
 ### Suggested database tables
 
@@ -188,13 +198,13 @@ The `hc` prefix stands for headless-chat. It's suggested to use the following ta
 > [!NOTE]
 > `onReadMessages` is expected to return messages with their `reactions` array already populated. A single join query against `hc_messages` and `hc_reactions` per page is the recommended approach – avoid per-message lookups.
 
-The server API does not provide any scaffolding for cleaning up or otherwise modifying conversations, invites and messages without user-intent. However, such functions can be added manually since the database is a concern of the library's consumer.
-
 All IDs are defined as strings so that you can integrate it in any existing schema. The library will pass UUIDs to the handlers, but your participant ID can also be a stringified incrementing number - it's defined as a string to ensure UUIDs work too.
 
 ## Shared types
 
-#### Conversation
+#### ConversationRecord
+
+The shape your DB stores and what `onCreateConversation` receives.
 
 ```ts
 {
@@ -202,8 +212,17 @@ All IDs are defined as strings so that you can integrate it in any existing sche
     participants: string[], // Participant IDs
     createdAt: Date,
     lastActivityAt: Date, // Conversations are usually ordered by this; not participant specific
+    maxSize: number | null, // null = unbounded, but the global upper cap from rateLimits still applies
+}
+```
+
+#### Conversation
+
+The surfaced shape the client receives.
+
+```ts
+ConversationRecord & {
     lastMessage: Message | null, // Can be null if the conversation has no messages yet
-    participantActivity: ParticipantActivity, // Participant-specific
 }
 ```
 
@@ -218,8 +237,18 @@ All IDs are defined as strings so that you can integrate it in any existing sche
     participantId: string, // The participant that sent this message
     reactions: Reaction[],
     deleted: boolean,
+    systemEvent: SystemEvent | null,
     createdAt: Date,
     modifiedAt: Date | null,
+}
+```
+
+#### SystemEvent
+
+```ts
+{
+    type: "participantJoined" | "participantLeft",
+    participantId: string,
 }
 ```
 
@@ -236,7 +265,6 @@ All IDs are defined as strings so that you can integrate it in any existing sche
 
 ```ts
 {
-    indicatorId: string,
     participantId: string,
     conversationId: string,
     createdAt: Date,
@@ -259,7 +287,6 @@ All IDs are defined as strings so that you can integrate it in any existing sche
 
 ```ts
 {
-    inviteId: string,
     fromParticipantId: string, // The participant who sent the invitation
     toParticipantId: string, // The participant who is invited
     conversation: Conversation,
