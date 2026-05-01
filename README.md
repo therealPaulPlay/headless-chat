@@ -303,8 +303,8 @@ ConversationRecord & {
 {
     conversationId: string, // The conversationId + participantId should be unique in the database (unique index)
     participantId: string,
-    lastReadMessageId: string | null, // Can be null if the participant has not read any messages yet
-    lastReadMessageCreatedAt: Date | null, // Creation date of the message (not read date)
+    lastReadMessageId: string,
+    lastReadMessageCreatedAt: Date, // Creation date of the message (not read date)
 }
 ```
 

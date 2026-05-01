@@ -57,8 +57,8 @@ export type Invite = {
 export type ParticipantActivity = {
     conversationId: string,
     participantId: string,
-    lastReadMessageId: string | null,
-    lastReadMessageCreatedAt: Date | null,
+    lastReadMessageId: string,
+    lastReadMessageCreatedAt: Date,
 }
 
 export type Alias = {
