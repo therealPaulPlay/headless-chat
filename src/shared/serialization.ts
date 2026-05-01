@@ -1,5 +1,3 @@
-import { encode as msgpackEncode, decode as msgpackDecode } from "@msgpack/msgpack";
-
 const HTML_ESCAPES: Record<string, string> = {
     "&": "&amp;",
     "<": "&lt;",
@@ -14,7 +12,8 @@ function escapeString(value: string): string {
     return value.replace(ESCAPE_RE, (match) => HTML_ESCAPES[match] ?? match);
 }
 
-function sanitize<T>(data: T): T {
+// Recursively HTML-escape every string in the payload, mutating in place
+export function sanitize<T>(data: T): T {
     if (typeof data === "string") return escapeString(data) as T;
     if (data === null || typeof data !== "object") return data;
     if (data instanceof Date || data instanceof Uint8Array) return data;
@@ -25,12 +24,4 @@ function sanitize<T>(data: T): T {
     const obj = data as Record<string, unknown>;
     for (const key of Object.keys(obj)) obj[key] = sanitize(obj[key]);
     return data;
-}
-
-export function encode<T>(data: T): Uint8Array {
-    return msgpackEncode(data);
-}
-
-export function decodeAndSanitize<T>(data: Uint8Array): T {
-    return sanitize(msgpackDecode(data) as T);
 }

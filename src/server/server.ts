@@ -1,6 +1,6 @@
-import { decodeAndSanitize } from "../shared/serialization.js";
+import { sanitize } from "../shared/serialization.js";
 import { type ClientToServer, isValidScope } from "../shared/protocol.js";
-import { logHandlerError } from "../shared/log.js";
+import { logError } from "../shared/log.js";
 import type { ServiceResult } from "./context.js";
 import type { Conversation, ConversationRecord, Message, MessageOptions, Reaction, Indicator, Invite, ParticipantActivity, Alias, SystemEvent } from "../shared/shared-types.js";
 import {
@@ -116,13 +116,11 @@ export class Server {
 
     // Transport ----------------------------------------------------------
 
-    async receive(data: Uint8Array): Promise<void> {
+    async receive(data: unknown): Promise<void> {
+        if (!data || typeof data !== "object" || typeof (data as { type?: unknown }).type !== "string") return;
         let message: ClientToServer;
-
-        // Sanitize and validate
-        try { message = decodeAndSanitize<ClientToServer>(data); }
-        catch (error) { logHandlerError("decode", error); return; }
-        if (!message || typeof message !== "object" || typeof (message as { type?: unknown }).type !== "string") return;
+        try { message = sanitize(data as ClientToServer); }
+        catch (error) { logError("sanitize", error); return; }
 
         // Auth callback - on failure, reject the pending request promise, sub/unsub failures drop silently
         const authed = await this.verifyAuth(message.participantId, message.authData);
@@ -141,7 +139,7 @@ export class Server {
         const handler = this.handlers.participantAuth;
         if (!handler) return false;
         try { return await handler(participantId, authData); }
-        catch (error) { logHandlerError("participantAuth", error); return false; }
+        catch (error) { logError("participantAuth", error); return false; }
     }
 
     // RPC dispatch -------------------------------------------------------
@@ -162,7 +160,7 @@ export class Server {
 
     private async runHooks(hooks: ServiceResult<unknown>["hooks"]): Promise<void> {
         for (const hook of hooks) {
-            try { await hook(); } catch (error) { logHandlerError("hook", error); }
+            try { await hook(); } catch (error) { logError("hook", error); }
         }
     }
 

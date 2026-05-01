@@ -1,7 +1,7 @@
 import type { Handlers, ResolvedRateLimits } from "./server-types.js";
 import type { Subscriptions } from "./subscriptions.js";
 import type { RateLimiter } from "./rate-limits.js";
-import { logHandlerError } from "../shared/log.js";
+import { logError } from "../shared/log.js";
 
 // Used for services as a "this.*" replacement so that they don't all need to be on the server class
 export type ServerContext = {
@@ -23,9 +23,9 @@ export function fireHook<K extends keyof Handlers>(handlers: Handlers, name: K, 
     if (!handler) return;
     try {
         const result = handler(...args);
-        if (result instanceof Promise) result.catch(error => logHandlerError(name, error));
+        if (result instanceof Promise) result.catch(error => logError(name, error));
     } catch (error) {
-        logHandlerError(name, error);
+        logError(name, error);
     }
 }
 

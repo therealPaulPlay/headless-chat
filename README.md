@@ -20,7 +20,7 @@ Constructor: `new Client(dispatch: ClientDispatch, participantId: string, getAut
 
 #### ClientDispatch
 
-A function that takes `data: Uint8Array` and sends it to the server, where it is passed to the server's `receive()` method. Can use a realtime protocol, but also works with HTTP requests. Uses `MessagePack` under the hood.
+A function that takes `data: unknown` (a plain object) and sends it to the server, where it is passed to the server's `receive()` method. Encoding is the consumer's choice (JSON, MessagePack etc., as you choose). Can use a realtime protocol, but also works with HTTP requests.
 
 #### GetAuthData
 
@@ -31,7 +31,7 @@ A function that takes no parameters and returns `authData: unknown` that is sent
 **Transport:**
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
-| receive(data: Uint8Array) | - | Call with data received by the server. |
+| receive(data: unknown) | - | Call with the decoded object received from the server. |
 
 **Conversations:**
 | Method | Returns | Description |
@@ -86,7 +86,7 @@ Constructor: `new Server(dispatch: ServerDispatch, rateLimits?: RateLimitOptions
 
 #### ServerDispatch
 
-A function that takes `data: Uint8Array` and pushes it to the client, where it is passed to the client's `receive()` method. Recommended to be used with SSE or WS, but is protocol agnostic. Uses `MessagePack` under the hood.
+A function that takes `data: unknown` (a plain object) and pushes it to the client, where it is passed to the client's `receive()` method. Encoding is the consumer's choice. Recommended to be used with SSE or WS, but is protocol agnostic.
 
 #### RateLimitOptions
 
@@ -123,7 +123,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 **Transport:**
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
-| receive(data: Uint8Array) | - | Call with data received by the client. |
+| receive(data: unknown) | - | Call with the decoded object received from the client. |
 
 **Admin:**
 | Method | Returns | Description |

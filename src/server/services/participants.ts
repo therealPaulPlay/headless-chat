@@ -1,5 +1,6 @@
 import { getHandler } from "../server-types.js";
 import { type AfterHook, type ServerContext, type ServiceResult, fireHook } from "../context.js";
+import { logError } from "../../shared/log.js";
 import { leaveConversation } from "./conversations.js";
 
 export async function deleteParticipant(ctx: ServerContext, participantId: string): Promise<ServiceResult<void>> {
@@ -12,7 +13,7 @@ export async function deleteParticipant(ctx: ServerContext, participantId: strin
             const sub = await leaveConversation(ctx, participantId, conversation.conversationId);
             hooks.push(...sub.hooks);
         } catch (error) {
-            console.error(`headless-chat failed to remove ${participantId} from ${conversation.conversationId}:`, error);
+            logError(`leaveConversation (${participantId}, ${conversation.conversationId})`, error);
         }
     }
 

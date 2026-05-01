@@ -1,8 +1,7 @@
-import { encode } from "../shared/serialization.js";
 import { SCOPE } from "../shared/protocol.js";
 import { type Handlers, type ServerDispatch, getHandler } from "./server-types.js";
 import type { Conversation, Invite, Message } from "../shared/shared-types.js";
-import { logHandlerError } from "../shared/log.js";
+import { logError } from "../shared/log.js";
 
 export class Subscriptions {
     private byScope = new Map<string, Set<string>>();
@@ -56,22 +55,21 @@ export class Subscriptions {
     }
 
     sendResponse(participantId: string, requestId: string, ok: boolean, data: unknown, error?: string): void {
-        this.dispatch(participantId, encode({ type: "response", requestId, ok, data, error }));
+        this.dispatch(participantId, { type: "response", requestId, ok, data, error });
     }
 
     // Targets is an optional iterator of participant IDs, if ommited, it will be distributed to all participants with the scope
     private emit(scope: string, data: unknown, targets?: Iterable<string>): void {
         const subs = this.byScope.get(scope);
         if (!subs || subs.size === 0) return;
-        
-        // Prepare the payload and distribute
-        const encoded = encode({ type: "event", scope, data });
+
+        const event = { type: "event", scope, data };
         if (targets) {
             for (const participantId of targets) {
-                if (subs.has(participantId)) this.dispatch(participantId, encoded);
+                if (subs.has(participantId)) this.dispatch(participantId, event);
             }
         } else {
-            for (const participantId of subs) this.dispatch(participantId, encoded);
+            for (const participantId of subs) this.dispatch(participantId, event);
         }
     }
 
@@ -83,7 +81,7 @@ export class Subscriptions {
         try {
             const message = await getHandler(this.handlers, "readMessage")(messageId);
             if (message) this.broadcastMessage(message);
-        } catch (error) { logHandlerError("readMessage", error); }
+        } catch (error) { logError("readMessage", error); }
     }
 
     async broadcastIndicators(conversationId: string): Promise<void> {
@@ -91,7 +89,7 @@ export class Subscriptions {
         if (!this.byScope.get(scope)?.size) return;
         try {
             this.emit(scope, await getHandler(this.handlers, "readIndicators")(conversationId));
-        } catch (error) { logHandlerError("readIndicators", error); }
+        } catch (error) { logError("readIndicators", error); }
     }
 
     broadcastConversation(conversation: Conversation): void {

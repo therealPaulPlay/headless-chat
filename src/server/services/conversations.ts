@@ -3,7 +3,7 @@ import { getHandler } from "../server-types.js";
 import { type AfterHook, type ServerContext, type ServiceResult, fireHook, newId, now } from "../context.js";
 import { effectiveMaxParticipants } from "../validation.js";
 import { addMessage } from "./messages.js";
-import { logHandlerError } from "../../shared/log.js";
+import { logError } from "../../shared/log.js";
 
 // Adds the participant atomically, posts the join system message, returns hooks to fire after RPC response
 async function joinFlow(ctx: ServerContext, conversationId: string, participantId: string, conversation: Conversation): Promise<AfterHook[]> {
@@ -44,7 +44,7 @@ export async function createInvite(ctx: ServerContext, fromParticipantId: string
     if (ctx.handlers.inviteAuth) {
         let allowed: boolean;
         try { allowed = await ctx.handlers.inviteAuth(fromParticipantId, toParticipantId); }
-        catch (error) { logHandlerError("inviteAuth", error); throw new Error("Invite check failed"); }
+        catch (error) { logError("inviteAuth", error); throw new Error("Invite check failed"); }
         if (!allowed) throw new Error("Not authorized to invite this participant");
     }
 

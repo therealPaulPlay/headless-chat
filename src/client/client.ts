@@ -1,10 +1,11 @@
-import { encode, decodeAndSanitize } from "../shared/serialization.js";
+import { sanitize } from "../shared/serialization.js";
+import { logError } from "../shared/log.js";
 import { type ServerToClient, SCOPE } from "../shared/protocol.js";
 import type { Conversation, Invite, Message, MessageOptions, Indicator, Alias, ParticipantActivity } from "../shared/shared-types.js";
 
 export type { Conversation, Message, MessageOptions, Indicator, Invite, ParticipantActivity, Alias } from "../shared/shared-types.js";
 
-export type ClientDispatch = (data: Uint8Array) => void;
+export type ClientDispatch = (data: unknown) => void;
 export type GetAuthData = () => unknown | Promise<unknown>;
 
 type AnyHandler = (...args: unknown[]) => void;
@@ -31,11 +32,11 @@ export class Client {
 
     // Transport ----------------------------------------------------------
 
-    receive(data: Uint8Array): void {
+    receive(data: unknown): void {
+        if (!data || typeof data !== "object") return;
         let message: ServerToClient;
-        try { message = decodeAndSanitize<ServerToClient>(data); }
-        catch (error) { console.error("headless-chat decode error:", error); return; }
-        if (!message || typeof message !== "object") return;
+        try { message = sanitize(data as ServerToClient); }
+        catch (error) { logError("sanitize", error); return; }
 
         // Responses to the requests from the player
         if (message.type === "response") {
@@ -62,7 +63,7 @@ export class Client {
 
     private async sendEnvelope(envelope: object): Promise<void> {
         const authData = await this.getAuthData();
-        this.dispatch(encode({ ...envelope, participantId: this.participantId, authData }));
+        this.dispatch({ ...envelope, participantId: this.participantId, authData });
     }
 
     private async request<T>(method: string, args: unknown[]): Promise<T> {

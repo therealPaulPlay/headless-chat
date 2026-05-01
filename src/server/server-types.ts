@@ -9,7 +9,7 @@ import type {
     Alias,
 } from "../shared/shared-types.js";
 
-export type ServerDispatch = (participantId: string, data: Uint8Array) => void;
+export type ServerDispatch = (participantId: string, data: unknown) => void;
 
 export type RateLimitOptions = {
     inviteLimitPerHour?: number,

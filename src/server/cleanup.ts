@@ -1,6 +1,6 @@
 import { type Handlers, type ResolvedCleanup, getHandler } from "./server-types.js";
 import type { RateLimiter } from "./rate-limits.js";
-import { logHandlerError } from "../shared/log.js";
+import { logError } from "../shared/log.js";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -46,7 +46,7 @@ export class CleanupScheduler {
     private async runIndicators(): Promise<void> {
         const handler = getHandler(this.handlers, "deleteIndicatorsBefore");
         const threshold = new Date(Date.now() - this.cleanup.indicatorCleanupIntervalSeconds * 1000);
-        try { await handler(threshold); } catch (error) { logHandlerError("deleteIndicatorsBefore", error); }
+        try { await handler(threshold); } catch (error) { logError("deleteIndicatorsBefore", error); }
     }
 
     private async runDaily(): Promise<void> {
@@ -54,17 +54,17 @@ export class CleanupScheduler {
         if (this.cleanup.messageAfterDays && this.cleanup.messageAfterDays > 0) {
             const handler = getHandler(this.handlers, "deleteMessagesBefore");
             try { await handler(new Date(now - this.cleanup.messageAfterDays * ONE_DAY_MS)); }
-            catch (error) { logHandlerError("deleteMessagesBefore", error); }
+            catch (error) { logError("deleteMessagesBefore", error); }
         }
         if (this.cleanup.conversationAfterInactiveDays && this.cleanup.conversationAfterInactiveDays > 0) {
             const handler = getHandler(this.handlers, "deleteInactiveConversationsBefore");
             try { await handler(new Date(now - this.cleanup.conversationAfterInactiveDays * ONE_DAY_MS)); }
-            catch (error) { logHandlerError("deleteInactiveConversationsBefore", error); }
+            catch (error) { logError("deleteInactiveConversationsBefore", error); }
         }
         if (this.cleanup.inviteAfterDays && this.cleanup.inviteAfterDays > 0) {
             const handler = getHandler(this.handlers, "deleteInvitesBefore");
             try { await handler(new Date(now - this.cleanup.inviteAfterDays * ONE_DAY_MS)); }
-            catch (error) { logHandlerError("deleteInvitesBefore", error); }
+            catch (error) { logError("deleteInvitesBefore", error); }
         }
     }
 }
