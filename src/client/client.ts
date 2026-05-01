@@ -30,6 +30,14 @@ export class Client {
         this.getAuthData = getAuthData;
     }
 
+    // Reject in-flight RPCs and clear handler tracking, call when discarding the instance
+    dispose(): void {
+        for (const { reject } of this.pending.values()) reject(new Error("Client disposed"));
+        this.pending.clear();
+        this.scopeHandlers.clear();
+        this.handlerScope.clear();
+    }
+
     // Transport ----------------------------------------------------------
 
     receive(data: unknown): void {
