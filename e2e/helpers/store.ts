@@ -1,5 +1,5 @@
 import type { Server } from "../../src/server/server.js";
-import type { Conversation, ConversationRecord, Indicator, Invite, Message, ParticipantActivity, Reaction, Alias } from "../../src/shared/shared-types.js";
+import type { Conversation, ConversationRecord, Invite, Message, ParticipantActivity, Reaction } from "../../src/shared/shared-types.js";
 
 // Tiny in-memory faux-DB that implements all the handlers the lib expects
 // Mirrors what a consumer would do with SQL but using maps and arrays
@@ -9,7 +9,6 @@ export class InMemoryStore {
     conversationParticipants = new Map<string, Set<string>>(); // conversationId -> set of participantIds
     messages = new Map<string, Message>();
     reactions = new Map<string, Reaction>();
-    indicators: Indicator[] = [];
     invites: Invite[] = [];
     activities = new Map<string, ParticipantActivity>(); // key: conversationId|participantId
     aliases = new Map<string, string>(); // participantId -> alias
@@ -68,12 +67,6 @@ export class InMemoryStore {
             const existing = this.invites.find(i => i.conversation.conversationId === conversationId && i.toParticipantId === invite.toParticipantId);
             if (existing) return;
             this.invites.push({ ...invite });
-        });
-        server.onCreateIndicator(indicator => {
-            if (!this.isParticipant(indicator.conversationId, indicator.participantId)) throw new Error("Not a participant");
-            // Upsert by (conversationId, participantId)
-            this.indicators = this.indicators.filter(i => !(i.conversationId === indicator.conversationId && i.participantId === indicator.participantId));
-            this.indicators.push({ ...indicator });
         });
         server.onCreateConversationParticipantActivity(activity => {
             if (!this.isParticipant(activity.conversationId, activity.participantId)) return;
@@ -146,7 +139,6 @@ export class InMemoryStore {
                 return alias ? [{ participantId: pid, alias }] : [];
             });
         });
-        server.onReadIndicators(conversationId => this.indicators.filter(i => i.conversationId === conversationId).map(i => ({ ...i })));
         server.onReadConversationParticipantActivity((conversationId, participantId) => {
             const found = this.activities.get(this.activityKey(conversationId, participantId));
             return found ? { ...found } : null;
@@ -193,12 +185,6 @@ export class InMemoryStore {
         });
         server.onDeleteInvites(invites => {
             this.invites = this.invites.filter(existing => !invites.some(target => target.conversationId === existing.conversation.conversationId && target.toParticipantId === existing.toParticipantId));
-        });
-        server.onDeleteIndicatorsBefore(thresholdDate => {
-            this.indicators = this.indicators.filter(i => i.createdAt.getTime() >= thresholdDate.getTime());
-        });
-        server.onDeleteIndicator((conversationId, participantId) => {
-            this.indicators = this.indicators.filter(i => !(i.conversationId === conversationId && i.participantId === participantId));
         });
         server.onDeleteConversationParticipantActivities((conversationIds, participantIds) => {
             for (const key of [...this.activities.keys()]) {

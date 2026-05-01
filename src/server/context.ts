@@ -1,6 +1,7 @@
 import type { Handlers, ResolvedRateLimits } from "./server-types.js";
 import type { Subscriptions } from "./subscriptions.js";
 import type { RateLimiter } from "./rate-limits.js";
+import type { IndicatorStore } from "./indicators-store.js";
 import { logError } from "../shared/log.js";
 
 // Used for services as a "this.*" replacement so that they don't all need to be on the server class
@@ -10,6 +11,7 @@ export type ServerContext = {
     rateLimiter: RateLimiter,
     rateLimits: ResolvedRateLimits,
     activityCache: Map<string, number>, // ${conversationId}|${participantId} -> lastReadMessageCreatedAt as ms
+    indicators: IndicatorStore,
 }
 
 export type AfterHook = () => void | Promise<void>;

@@ -2,7 +2,6 @@ import type {
     Conversation,
     ConversationRecord,
     Message,
-    Indicator,
     Reaction,
     Invite,
     ParticipantActivity,
@@ -19,6 +18,7 @@ export type RateLimitOptions = {
 }
 
 export type CleanupOptions = {
+    indicatorTtlSeconds?: number,
     indicatorCleanupIntervalSeconds?: number,
     messageAfterDays?: number | null,
     conversationAfterInactiveDays?: number | null,
@@ -34,6 +34,7 @@ export type ResolvedRateLimits = {
 }
 
 export type ResolvedCleanup = {
+    indicatorTtlSeconds: number,
     indicatorCleanupIntervalSeconds: number,
     messageAfterDays: number | null,
     conversationAfterInactiveDays: number | null,
@@ -48,14 +49,12 @@ export type Handlers = {
     createMessage?: Handler<[Message], void>,
     createReaction?: Handler<[Reaction], void>,
     createInvite?: Handler<[Invite], void>,
-    createIndicator?: Handler<[Indicator], void>,
     createConversationParticipantActivity?: Handler<[ParticipantActivity], void>,
 
     readConversations?: Handler<[string], Conversation[]>,
     readMessages?: Handler<[string, string | null, boolean, number], { messages: Message[], remainingInDirection: number }>,
     readInvites?: Handler<[string], Invite[]>,
     readAliases?: Handler<[string[]], Alias[]>,
-    readIndicators?: Handler<[string], Indicator[]>,
     readConversationParticipantActivity?: Handler<[string, string], ParticipantActivity | null>,
     readParticipantActivities?: Handler<[string], ParticipantActivity[]>,
     readMessage?: Handler<[string], Message | null>,
@@ -71,8 +70,6 @@ export type Handlers = {
     deleteReaction?: Handler<[string], void>,
     deleteConversationWithMessagesAndReactions?: Handler<[string], void>,
     deleteInvites?: Handler<[{ conversationId: string, toParticipantId: string }[]], void>,
-    deleteIndicatorsBefore?: Handler<[Date], void>,
-    deleteIndicator?: Handler<[string, string], void>,
     deleteConversationParticipantActivities?: Handler<[string[], string[]], void>,
     deleteMessagesBefore?: Handler<[Date], void>,
     deleteInactiveConversationsBefore?: Handler<[Date], void>,

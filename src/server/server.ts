@@ -2,7 +2,7 @@ import { sanitize } from "../shared/serialization.js";
 import { type ClientToServer, isValidScope } from "../shared/protocol.js";
 import { logError } from "../shared/log.js";
 import type { ServiceResult } from "./context.js";
-import type { Conversation, ConversationRecord, Message, MessageOptions, Reaction, Indicator, Invite, ParticipantActivity, Alias, SystemEvent } from "../shared/shared-types.js";
+import type { Conversation, ConversationRecord, Message, MessageOptions, Reaction, Invite, ParticipantActivity, Alias, SystemEvent } from "../shared/shared-types.js";
 import {
     type ServerDispatch,
     type RateLimitOptions,
@@ -14,10 +14,11 @@ import {
 } from "./server-types.js";
 
 export type { ServerDispatch, RateLimitOptions, CleanupOptions } from "./server-types.js";
-export type { Conversation, ConversationRecord, Message, MessageOptions, SystemEvent, Indicator, Reaction, Invite, ParticipantActivity, Alias } from "../shared/shared-types.js";
+export type { Conversation, ConversationRecord, Message, MessageOptions, SystemEvent, Reaction, Invite, ParticipantActivity, Alias } from "../shared/shared-types.js";
 import { Subscriptions } from "./subscriptions.js";
 import { RateLimiter } from "./rate-limits.js";
 import { CleanupScheduler } from "./cleanup.js";
+import { IndicatorStore } from "./indicators-store.js";
 import type { ServerContext } from "./context.js";
 
 import * as conversationsService from "./services/conversations.js";
@@ -25,8 +26,6 @@ import * as messagesService from "./services/messages.js";
 import * as indicatorsService from "./services/indicators.js";
 import * as gettersService from "./services/getters.js";
 import * as participantsService from "./services/participants.js";
-
-const INDICATOR_TTL_SECONDS = 5;
 
 export class Server {
     private dispatch: ServerDispatch;
@@ -46,9 +45,9 @@ export class Server {
             conversationParticipantLimit: rateLimits.conversationParticipantLimit ?? 100,
             sweepIntervalSeconds: rateLimits.sweepIntervalSeconds ?? 30,
         };
-        const indicatorInterval = cleanup.indicatorCleanupIntervalSeconds;
         this.cleanup = {
-            indicatorCleanupIntervalSeconds: (indicatorInterval && indicatorInterval > 0) ? indicatorInterval : INDICATOR_TTL_SECONDS,
+            indicatorTtlSeconds: (cleanup.indicatorTtlSeconds && cleanup.indicatorTtlSeconds > 0) ? cleanup.indicatorTtlSeconds : 3,
+            indicatorCleanupIntervalSeconds: (cleanup.indicatorCleanupIntervalSeconds && cleanup.indicatorCleanupIntervalSeconds > 0) ? cleanup.indicatorCleanupIntervalSeconds : 5,
             messageAfterDays: cleanup.messageAfterDays ?? null,
             conversationAfterInactiveDays: cleanup.conversationAfterInactiveDays ?? null,
             inviteAfterDays: cleanup.inviteAfterDays ?? 7,
@@ -56,15 +55,17 @@ export class Server {
         };
 
         const activityCache = new Map<string, number>();
-        this.subscriptions = new Subscriptions(this.dispatch, this.handlers);
+        const indicators = new IndicatorStore();
+        this.subscriptions = new Subscriptions(this.dispatch, this.handlers, indicators);
         this.rateLimiter = new RateLimiter(this.rateLimits);
-        this.scheduler = new CleanupScheduler(this.handlers, this.cleanup, this.rateLimiter, this.rateLimits.sweepIntervalSeconds, activityCache);
+        this.scheduler = new CleanupScheduler(this.handlers, this.cleanup, this.rateLimiter, this.rateLimits.sweepIntervalSeconds, activityCache, indicators);
         this.ctx = {
             handlers: this.handlers,
             subscriptions: this.subscriptions,
             rateLimiter: this.rateLimiter,
             rateLimits: this.rateLimits,
             activityCache,
+            indicators,
         };
         this.scheduler.start();
     }
@@ -79,14 +80,12 @@ export class Server {
     onCreateMessage(handler: Handler<[Message], void>) { this.handlers.createMessage = handler; }
     onCreateReaction(handler: Handler<[Reaction], void>) { this.handlers.createReaction = handler; }
     onCreateInvite(handler: Handler<[Invite], void>) { this.handlers.createInvite = handler; }
-    onCreateIndicator(handler: Handler<[Indicator], void>) { this.handlers.createIndicator = handler; }
     onCreateConversationParticipantActivity(handler: Handler<[ParticipantActivity], void>) { this.handlers.createConversationParticipantActivity = handler; }
 
     onReadConversations(handler: Handler<[string], Conversation[]>) { this.handlers.readConversations = handler; }
     onReadMessages(handler: Handler<[string, string | null, boolean, number], { messages: Message[], remainingInDirection: number }>) { this.handlers.readMessages = handler; }
     onReadInvites(handler: Handler<[string], Invite[]>) { this.handlers.readInvites = handler; }
     onReadAliases(handler: Handler<[string[]], Alias[]>) { this.handlers.readAliases = handler; }
-    onReadIndicators(handler: Handler<[string], Indicator[]>) { this.handlers.readIndicators = handler; }
     onReadConversationParticipantActivity(handler: Handler<[string, string], ParticipantActivity | null>) { this.handlers.readConversationParticipantActivity = handler; }
     onReadParticipantActivities(handler: Handler<[string], ParticipantActivity[]>) { this.handlers.readParticipantActivities = handler; }
     onReadMessage(handler: Handler<[string], Message | null>) { this.handlers.readMessage = handler; }
@@ -102,8 +101,6 @@ export class Server {
     onDeleteReaction(handler: Handler<[string], void>) { this.handlers.deleteReaction = handler; }
     onDeleteConversationWithMessagesAndReactions(handler: Handler<[string], void>) { this.handlers.deleteConversationWithMessagesAndReactions = handler; }
     onDeleteInvites(handler: Handler<[{ conversationId: string, toParticipantId: string }[]], void>) { this.handlers.deleteInvites = handler; }
-    onDeleteIndicatorsBefore(handler: Handler<[Date], void>) { this.handlers.deleteIndicatorsBefore = handler; }
-    onDeleteIndicator(handler: Handler<[string, string], void>) { this.handlers.deleteIndicator = handler; }
     onDeleteConversationParticipantActivities(handler: Handler<[string[], string[]], void>) { this.handlers.deleteConversationParticipantActivities = handler; }
     onDeleteMessagesBefore(handler: Handler<[Date], void>) { this.handlers.deleteMessagesBefore = handler; }
     onDeleteInactiveConversationsBefore(handler: Handler<[Date], void>) { this.handlers.deleteInactiveConversationsBefore = handler; }

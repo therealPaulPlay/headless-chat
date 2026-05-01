@@ -119,22 +119,41 @@ describe("e2e", () => {
         expect(afterRemove?.reactions).toHaveLength(0);
     });
 
-    test("setIndicator broadcasts to subscribers", async () => {
-        const alice = transport.addClient("alice");
-        const bob = transport.addClient("bob");
-        const conversationId = await alice.createConversation();
-        await alice.createInvite(conversationId, "bob");
-        await bob.acceptInvite(conversationId);
+    test("setIndicator broadcasts to subscribers and TTL evicts after expiry", async () => {
+        // Tight TTL + sweep so the test can advance real time and observe eviction quickly
+        const tight = new FakeTransport(undefined, { indicatorTtlSeconds: 1, indicatorCleanupIntervalSeconds: 1 });
+        try {
+            const alice = tight.addClient("alice");
+            const bob = tight.addClient("bob");
+            const charlie = tight.addClient("charlie");
+            const conversationId = await alice.createConversation();
+            await alice.createInvite(conversationId, "bob");
+            await alice.createInvite(conversationId, "charlie");
+            await bob.acceptInvite(conversationId);
+            await charlie.acceptInvite(conversationId);
 
-        const seen: Indicator[][] = [];
-        await bob.onIndicators(conversationId, indicators => seen.push(indicators));
+            const seen: Indicator[][] = [];
+            await charlie.onIndicators(conversationId, indicators => seen.push(indicators));
 
-        await alice.setIndicator(conversationId);
-        await tick();
+            await alice.setIndicator(conversationId);
+            await bob.setIndicator(conversationId);
+            await tick();
 
-        const last = seen.at(-1);
-        expect(last).toBeTruthy();
-        expect(last?.some(i => i.participantId === "alice")).toBe(true);
+            // Both indicators visible
+            const afterSet = seen.at(-1);
+            expect(afterSet?.length).toBe(2);
+
+            // Wait past TTL + at least one sweep tick - alice's and bob's stale indicators should be evicted
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            // Triggering a fresh broadcast lets us observe the post-sweep state, only alice's just-set indicator
+            await alice.setIndicator(conversationId);
+            await tick();
+            const afterRefresh = seen.at(-1);
+            expect(afterRefresh?.length).toBe(1);
+            expect(afterRefresh?.[0]?.participantId).toBe("alice");
+        } finally {
+            tight.stop();
+        }
     });
 
     test("auth rejection rejects the RPC", async () => {

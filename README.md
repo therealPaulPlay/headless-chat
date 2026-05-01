@@ -42,7 +42,7 @@ A function that takes no parameters and returns `authData: unknown` that is sent
 | async acceptInvite(conversationId: string) | - | Join a conversation from an invite. Deletes all invites for that conversation for this participant. |
 | async declineInvite(conversationId: string) | - | Decline and delete all invites for a conversation. |
 | async leaveConversation(conversationId: string) | - | Leave a conversation. The conversation will be deleted when all participants have left. |
-| async setIndicator(conversationId: string) | - | Set the typing indicator. Has a TTL defined in the handler, setting every X-1 seconds to avoid gaps/flicker is suggested. |
+| async setIndicator(conversationId: string) | - | Set the typing indicator. Has a TTL of `indicatorTtlSeconds` (default 3s), set every X-1 seconds to avoid gaps/flicker. |
 | async removeIndicator(conversationId: string) | - | Remove the typing indicator. Automatically, synchronously called when sending a message. |
 
 **Messages:**
@@ -107,7 +107,8 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 
 ```ts
 {
-    indicatorCleanupIntervalSeconds?: number, // Defaults to 5, cannot be disabled
+    indicatorTtlSeconds?: number, // Defaults to 3, indicators older than this get swept
+    indicatorCleanupIntervalSeconds?: number, // Defaults to 5, how often the sweep runs
     messageAfterDays?: number, // Defaults to null = disabled
     conversationAfterInactiveDays?: number, // Defaults to null = disabled, inactive means no new messages have been sent
     inviteAfterDays?: number, // Defaults to 7, can be set to null = disabled
@@ -147,7 +148,6 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onCreateMessage(handler: function) | message: Message | Should create the provided message in the database. Guard the insert with a participation check so a participant who concurrently left cannot post, except when `participantId === "server"`, which is the reserved sentinel for library-authored system messages and must always be allowed. |
 | onCreateReaction(handler: function) | reaction: Reaction | Should create the provided reaction in the database. Guard the insert with a participation check. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
 | onCreateInvite(handler: function) | invite: Invite | Atomically insert the invite, deduplicating on `(conversationId, toParticipantId)` (no-op on conflict). If the recipient is already a participant of the conversation, throw. The insert must verify that both `fromParticipantId` and `toParticipantId` exist in your users table (or wherever the referenced account is stored). |
-| onCreateIndicator(handler: function) | indicator: Indicator | Should create or re-create (if one already exists) a typing indicator. Guard the insert with a participation check. |
 | onCreateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | Should create a participant activity entry in the database. Guard the insert with a participation check so activity is not created for participants who concurrently left the conversation. |
 
 **Read handlers:**
@@ -161,7 +161,6 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onReadInvites(handler: function) | participantId: string | invites: Invite[] | Should return all invites created by or created for the provided participant, ordered by `createdAt` descending. |
 | onReadInvite(handler: function) | conversationId: string, toParticipantId: string | `invite: Invite | null` | Should return the invite for the pair, or null. |
 | onReadAliases(handler: function) | participants: string[] | aliases: Alias[] | Should return all aliases for the provided participant IDs. In a simple implementation, this can look up the usernames from an existing users table. |
-| onReadIndicators(handler: function) | conversationId: string | indicators: Indicator[] | Should return all typing indicators for a conversation. |
 | onReadConversationParticipantActivity(handler: function) | conversationId: string, participantId: string | `participantActivity: ParticipantActivity | null` | Should return the participant activity from the database or `null` if it does not exist. |
 | onReadParticipantActivities(handler: function) | participantId: string | activities: ParticipantActivity[] | Should return all participant activity rows for the given participant. |
 
@@ -179,8 +178,6 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onDeleteReaction(handler: function) | reactionId: string | Should delete the specified reaction in the database. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
 | onDeleteConversationWithMessagesAndReactions(handler: function) | conversationId: string | Should delete the conversation, all its messages, and all reactions to those messages. Recommended to wrap in a single transaction with three statements: delete reactions joined to messages by `messageId` filtered by `conversationId`, then delete messages by `conversationId`, then delete the conversation by `conversationId`. |
 | onDeleteInvites(handler: function) | invites: { conversationId: string, toParticipantId: string }[] | Should delete the provided invites in the database. |
-| onDeleteIndicatorsBefore(handler: function) | thresholdDate: Date | Should delete all indicators whose `createdAt` is before `thresholdDate`. Called every `indicatorCleanupIntervalSeconds`. |
-| onDeleteIndicator(handler: function) | conversationId: string, participantId: string | Should delete the indicator for the given pair in a single statement. |
 | onDeleteConversationParticipantActivities(handler: function) |  conversationIds: string[], participantIds: string[] | Should delete all matching activities. Multiple participants are provided when a conversation gets deleted, multiple conversations are provided when a participant leaves (potentially through propagation of `deleteParticipant`). |
 | onDeleteMessagesBefore(handler: function) | thresholdDate: Date | Should delete all messages whose `createdAt` is before `thresholdDate`, plus their reactions. |
 | onDeleteInactiveConversationsBefore(handler: function) | thresholdDate: Date | Should delete all conversations whose `lastActivityAt` is before `thresholdDate`, plus their messages and reactions. |
@@ -212,7 +209,7 @@ Hooks fire after the underlying RPC response has been sent to the client (or aft
 ### Suggested database tables
 
 The `hc` prefix stands for headless-chat. It's suggested to use the following tables:
-`hc_conversations`, `hc_conversation_participants`, `hc_participant_activities`, `hc_messages`, `hc_indicators`, `hc_reactions`, `hc_invites` and, if aliases are configurable, `hc_aliases`. Ensure proper indexing.
+`hc_conversations`, `hc_conversation_participants`, `hc_participant_activities`, `hc_messages`, `hc_reactions`, `hc_invites` and, if aliases are configurable, `hc_aliases`. Ensure proper indexing.
 
 Participant IDs are strings and stringified numbers over UUIDs work fine.
 
@@ -274,16 +271,6 @@ ConversationRecord & {
 {
     referenceMessageId: string | null // Reply to a message referenced by a message ID
     isForwarded: boolean // Whether to display a message as 'forwarded'
-}
-```
-
-#### Indicator
-
-```ts
-{
-    participantId: string,
-    conversationId: string,
-    createdAt: Date,
 }
 ```
 

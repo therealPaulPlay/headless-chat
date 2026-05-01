@@ -1,6 +1,7 @@
 import { SCOPE } from "../shared/protocol.js";
 import { type Handlers, type ServerDispatch, getHandler } from "./server-types.js";
 import type { Conversation, Invite, Message } from "../shared/shared-types.js";
+import type { IndicatorStore } from "./indicators-store.js";
 import { logError } from "../shared/log.js";
 
 export class Subscriptions {
@@ -10,6 +11,7 @@ export class Subscriptions {
     constructor(
         private dispatch: ServerDispatch,
         private handlers: Handlers,
+        private indicators: IndicatorStore,
     ) { }
 
     // Add a participant to a specific scope
@@ -84,12 +86,10 @@ export class Subscriptions {
         } catch (error) { logError("readMessage", error); }
     }
 
-    async broadcastIndicators(conversationId: string): Promise<void> {
+    broadcastIndicators(conversationId: string): void {
         const scope = SCOPE.indicators(conversationId);
         if (!this.byScope.get(scope)?.size) return;
-        try {
-            this.emit(scope, await getHandler(this.handlers, "readIndicators")(conversationId));
-        } catch (error) { logError("readIndicators", error); }
+        this.emit(scope, this.indicators.list(conversationId));
     }
 
     broadcastConversation(conversation: Conversation): void {

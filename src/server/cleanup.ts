@@ -1,5 +1,6 @@
 import { type Handlers, type ResolvedCleanup, getHandler } from "./server-types.js";
 import type { RateLimiter } from "./rate-limits.js";
+import type { IndicatorStore } from "./indicators-store.js";
 import { logError } from "../shared/log.js";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -16,10 +17,11 @@ export class CleanupScheduler {
         private rateLimiter: RateLimiter,
         private sweepIntervalSeconds: number,
         private activityCache: Map<string, number>,
+        private indicators: IndicatorStore,
     ) { }
 
     start(): void {
-        this.indicatorTimer = setInterval(() => void this.runIndicators(), this.cleanup.indicatorCleanupIntervalSeconds * 1000);
+        this.indicatorTimer = setInterval(() => this.runIndicators(), this.cleanup.indicatorCleanupIntervalSeconds * 1000);
         this.indicatorTimer.unref?.(); // Unref to let the node process exit naturally
 
         this.dailyTimer = setInterval(() => void this.runDaily(), ONE_DAY_MS);
@@ -43,10 +45,8 @@ export class CleanupScheduler {
         this.activityCacheTimer = null;
     }
 
-    private async runIndicators(): Promise<void> {
-        const handler = getHandler(this.handlers, "deleteIndicatorsBefore");
-        const threshold = new Date(Date.now() - this.cleanup.indicatorCleanupIntervalSeconds * 1000);
-        try { await handler(threshold); } catch (error) { logError("deleteIndicatorsBefore", error); }
+    private runIndicators(): void {
+        this.indicators.sweep(Date.now() - this.cleanup.indicatorTtlSeconds * 1000);
     }
 
     private async runDaily(): Promise<void> {
