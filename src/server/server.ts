@@ -122,6 +122,12 @@ export class Server {
         try { message = sanitize(data as ClientToServer); }
         catch (error) { logError("sanitize", error); return; }
 
+        // "server" is a reserved sentinel for library-authored system messages, clients cannot claim it
+        if (message.participantId === "server") {
+            if (message.type === "request") this.subscriptions.sendResponse(message.participantId, message.requestId, false, undefined, "Unauthorized");
+            return;
+        }
+
         // Auth callback - on failure, reject the pending request promise, sub/unsub failures drop silently
         const authed = await this.verifyAuth(message.participantId, message.authData);
         if (!authed) {

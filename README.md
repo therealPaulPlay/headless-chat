@@ -144,7 +144,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | Method | Calls with | Description |
 | ------ | ---------- | ------------|
 | onCreateConversation(handler: function) | conversation: ConversationRecord, creatorParticipantId: string | Should atomically (in a single transaction) insert the conversation row and add `creatorParticipantId` as the first participant. |
-| onCreateMessage(handler: function) | message: Message | Should create the provided message in the database. Guard the insert with a participation check so a participant who concurrently left cannot post. |
+| onCreateMessage(handler: function) | message: Message | Should create the provided message in the database. Guard the insert with a participation check so a participant who concurrently left cannot post, except when `participantId === "server"`, which is the reserved sentinel for library-authored system messages and must always be allowed. |
 | onCreateReaction(handler: function) | reaction: Reaction | Should create the provided reaction in the database. Guard the insert with a participation check. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
 | onCreateInvite(handler: function) | invite: Invite | Atomically insert the invite, deduplicating on `(conversationId, toParticipantId)` (no-op on conflict). If the recipient is already a participant of the conversation, throw. The insert must verify that both `fromParticipantId` and `toParticipantId` exist in your users table (or wherever the referenced account is stored). |
 | onCreateIndicator(handler: function) | indicator: Indicator | Should create or re-create (if one already exists) a typing indicator. Guard the insert with a participation check. |
@@ -153,12 +153,12 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 **Read handlers:**
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
-| onReadConversations(handler: function) | participantId: string | conversations: Conversation[] | Should return all conversations from the database that a given participant takes part in, with `lastMessage` populated via a join. |
+| onReadConversations(handler: function) | participantId: string | conversations: Conversation[] | Should return all conversations from the database that a given participant takes part in, with `lastMessage` populated via a join, ordered by `lastActivityAt` descending. |
 | onReadConversation(handler: function) | conversationId: string | `conversation: Conversation | null` | Should return the conversation by ID with `lastMessage` populated, or `null` if it does not exist. |
-| onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages, each with its `reactions` array populated. The cursor message is never included. With `after: true` return strictly newer, with `after: false` strictly older. The library creates or updates the participant activity if a message newer than the one specified in `lastReadMessageCreatedAt` (cached at runtime) is fetched.
+| onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages ordered by `createdAt` ascending, each with its `reactions` array populated. The cursor message is never included. With `after: true` return strictly newer, with `after: false` strictly older. The library creates or updates the participant activity if a message newer than the one specified in `lastReadMessageCreatedAt` (cached at runtime) is fetched.
 | onReadMessage(handler: function) | messageId: string | `message: Message | null` | Should return the message by ID with reactions populated, or null. |
 | onReadReaction(handler: function) | reactionId: string | `reaction: Reaction | null` | Should return the reaction by ID, or null. |
-| onReadInvites(handler: function) | participantId: string | invites: Invite[] | Should return all invites created by or created for the provided participant. |
+| onReadInvites(handler: function) | participantId: string | invites: Invite[] | Should return all invites created by or created for the provided participant, ordered by `createdAt` descending. |
 | onReadInvite(handler: function) | conversationId: string, toParticipantId: string | `invite: Invite | null` | Should return the invite for the pair, or null. |
 | onReadAliases(handler: function) | participants: string[] | aliases: Alias[] | Should return all aliases for the provided participant IDs. In a simple implementation, this can look up the usernames from an existing users table. |
 | onReadIndicators(handler: function) | conversationId: string | indicators: Indicator[] | Should return all typing indicators for a conversation. |
@@ -250,7 +250,7 @@ ConversationRecord & {
     conversationId: string,
     message: string,
     messageOptions: MessageOptions,
-    participantId: string, // The participant that sent this message
+    participantId: string, // The participant that sent this message, "server" for system messages
     reactions: Reaction[],
     deleted: boolean,
     systemEvent: SystemEvent | null,

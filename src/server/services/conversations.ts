@@ -9,7 +9,8 @@ import { logError } from "../../shared/log.js";
 async function joinFlow(ctx: ServerContext, conversationId: string, participantId: string, conversation: Conversation): Promise<AfterHook[]> {
     const max = effectiveMaxParticipants(conversation.maxSize, ctx.rateLimits.conversationParticipantLimit);
     await getHandler(ctx.handlers, "addConversationParticipant")(conversationId, participantId, max);
-    const sysMsg = await addMessage(ctx, conversationId, participantId, "", { referenceMessageId: null, isForwarded: false }, { type: "participantJoined", participantId });
+    // System messages are authored by the reserved "server" participant, the joining participant id is carried in systemEvent
+    const sysMsg = await addMessage(ctx, conversationId, "server", "", { referenceMessageId: null, isForwarded: false }, { type: "participantJoined", participantId });
     return [() => fireHook(ctx.handlers, "afterParticipantJoined", conversationId, participantId), ...sysMsg.hooks];
 }
 
@@ -149,7 +150,8 @@ export async function leaveConversation(ctx: ServerContext, participantId: strin
         };
     }
 
-    const sysMsg = await addMessage(ctx, conversationId, participantId, "", { referenceMessageId: null, isForwarded: false }, { type: "participantLeft", participantId });
+    // System messages are authored by the reserved "server" participant, the leaving participant id is carried in systemEvent
+    const sysMsg = await addMessage(ctx, conversationId, "server", "", { referenceMessageId: null, isForwarded: false }, { type: "participantLeft", participantId });
     await getHandler(ctx.handlers, "removeConversationParticipant")(conversationId, participantId);
     await getHandler(ctx.handlers, "deleteConversationParticipantActivities")([conversationId], [participantId]);
 
