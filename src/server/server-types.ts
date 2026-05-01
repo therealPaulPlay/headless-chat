@@ -44,7 +44,7 @@ export type ResolvedCleanup = {
 export type Handler<Args extends unknown[], R> = (...args: Args) => R | Promise<R>;
 
 export type Handlers = {
-    createConversation?: Handler<[ConversationRecord], void>,
+    createConversation?: Handler<[ConversationRecord, string], void>,
     createMessage?: Handler<[Message], void>,
     createReaction?: Handler<[Reaction], void>,
     createInvite?: Handler<[Invite], void>,

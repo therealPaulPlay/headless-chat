@@ -1,12 +1,12 @@
 export type ConversationRecord = {
     conversationId: string,
-    participants: string[],
     createdAt: Date,
     lastActivityAt: Date,
     maxSize: number | null,
 }
 
 export type Conversation = ConversationRecord & {
+    participants: string[],
     lastMessage: Message | null,
 }
 

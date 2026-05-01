@@ -6,6 +6,7 @@ import type { Conversation, ConversationRecord, Indicator, Invite, Message, Part
 export class InMemoryStore {
     users = new Set<string>();
     conversations = new Map<string, ConversationRecord>();
+    conversationParticipants = new Map<string, Set<string>>(); // conversationId -> set of participantIds
     messages = new Map<string, Message>();
     reactions = new Map<string, Reaction>();
     indicators: Indicator[] = [];
@@ -20,18 +21,23 @@ export class InMemoryStore {
     private surfaceConversation(record: ConversationRecord): Conversation {
         const messagesIn = [...this.messages.values()].filter(m => m.conversationId === record.conversationId);
         const lastMessage = messagesIn.length === 0 ? null : messagesIn.reduce((a, b) => a.createdAt.getTime() > b.createdAt.getTime() ? a : b);
-        return { ...record, lastMessage };
+        const participants = [...(this.conversationParticipants.get(record.conversationId) ?? [])];
+        return { ...record, participants, lastMessage };
     }
 
     private isParticipant(conversationId: string, participantId: string): boolean {
-        return this.conversations.get(conversationId)?.participants.includes(participantId) ?? false;
+        return this.conversationParticipants.get(conversationId)?.has(participantId) ?? false;
     }
 
     register(server: Server): void {
-        
+
         // Create handlers -------------------------------------------------------------------
-        
-        server.onCreateConversation(record => { this.conversations.set(record.conversationId, { ...record }); });
+
+        server.onCreateConversation((record, creatorParticipantId) => {
+            // Atomic in JS, mirrors the consumer's transaction (insert conversation + insert creator seat)
+            this.conversations.set(record.conversationId, { ...record });
+            this.conversationParticipants.set(record.conversationId, new Set([creatorParticipantId]));
+        });
         server.onCreateMessage(message => {
             // Participation guard
             if (!message.systemEvent && !this.isParticipant(message.conversationId, message.participantId)) {
@@ -78,7 +84,7 @@ export class InMemoryStore {
         
         server.onReadConversations(participantId => {
             return [...this.conversations.values()]
-                .filter(c => c.participants.includes(participantId))
+                .filter(c => this.isParticipant(c.conversationId, participantId))
                 .map(c => this.surfaceConversation(c));
         });
         server.onReadConversation(conversationId => {
@@ -152,16 +158,14 @@ export class InMemoryStore {
         // Update handlers -----------------------------------------------
         
         server.onAddConversationParticipant((conversationId, participantId, maxParticipants) => {
-            const record = this.conversations.get(conversationId);
-            if (!record) throw new Error("Conversation not found");
-            if (record.participants.includes(participantId)) throw new Error("Already a participant");
-            if (record.participants.length >= maxParticipants) throw new Error("Conversation is full");
-            record.participants = [...record.participants, participantId];
+            const set = this.conversationParticipants.get(conversationId);
+            if (!set) throw new Error("Conversation not found");
+            if (set.has(participantId)) throw new Error("Already a participant");
+            if (set.size >= maxParticipants) throw new Error("Conversation is full");
+            set.add(participantId);
         });
         server.onRemoveConversationParticipant((conversationId, participantId) => {
-            const record = this.conversations.get(conversationId);
-            if (!record) return;
-            record.participants = record.participants.filter(p => p !== participantId);
+            this.conversationParticipants.get(conversationId)?.delete(participantId);
         });
         server.onUpdateMessage(message => {
             const existing = this.messages.get(message.messageId);
@@ -185,6 +189,7 @@ export class InMemoryStore {
         server.onDeleteConversationWithMessagesAndReactions(conversationId => {
             for (const [id, m] of this.messages) if (m.conversationId === conversationId) this.messages.delete(id);
             this.conversations.delete(conversationId);
+            this.conversationParticipants.delete(conversationId);
         });
         server.onDeleteInvites(invites => {
             this.invites = this.invites.filter(existing => !invites.some(target => target.conversationId === existing.conversation.conversationId && target.toParticipantId === existing.toParticipantId));

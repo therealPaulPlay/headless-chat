@@ -75,7 +75,7 @@ export class Server {
 
     // Handler registration ----------------------------------------------
 
-    onCreateConversation(handler: Handler<[ConversationRecord], void>) { this.handlers.createConversation = handler; }
+    onCreateConversation(handler: Handler<[ConversationRecord, string], void>) { this.handlers.createConversation = handler; }
     onCreateMessage(handler: Handler<[Message], void>) { this.handlers.createMessage = handler; }
     onCreateReaction(handler: Handler<[Reaction], void>) { this.handlers.createReaction = handler; }
     onCreateInvite(handler: Handler<[Invite], void>) { this.handlers.createInvite = handler; }

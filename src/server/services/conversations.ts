@@ -17,13 +17,13 @@ export async function createConversation(ctx: ServerContext, participantId: stri
     const conversationId = newId();
     const record: ConversationRecord = {
         conversationId,
-        participants: [participantId],
         createdAt: now(),
         lastActivityAt: now(),
         maxSize: maxSize ?? null, // Stored as-is, the global cap is re-applied at every join check
     };
-    await getHandler(ctx.handlers, "createConversation")(record);
-    const surfaced: Conversation = { ...record, lastMessage: null };
+    // Consumer must atomically insert the conversation row and the creator's participant seat
+    await getHandler(ctx.handlers, "createConversation")(record, participantId);
+    const surfaced: Conversation = { ...record, participants: [participantId], lastMessage: null };
     ctx.subscriptions.broadcastConversation(surfaced);
     return { result: conversationId, hooks: [() => fireHook(ctx.handlers, "afterConversationCreated", surfaced)] };
 }

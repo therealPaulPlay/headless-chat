@@ -143,7 +143,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 **Create handlers:**
 | Method | Calls with | Description |
 | ------ | ---------- | ------------|
-| onCreateConversation(handler: function) | conversation: ConversationRecord | Should create the provided conversation in the database. |
+| onCreateConversation(handler: function) | conversation: ConversationRecord, creatorParticipantId: string | Should atomically (in a single transaction) insert the conversation row and add `creatorParticipantId` as the first participant. |
 | onCreateMessage(handler: function) | message: Message | Should create the provided message in the database. Guard the insert with a participation check so a participant who concurrently left cannot post. |
 | onCreateReaction(handler: function) | reaction: Reaction | Should create the provided reaction in the database. Guard the insert with a participation check. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
 | onCreateInvite(handler: function) | invite: Invite | Atomically insert the invite, deduplicating on `(conversationId, toParticipantId)` (no-op on conflict). If the recipient is already a participant of the conversation, throw. The insert must verify that both `fromParticipantId` and `toParticipantId` exist in your users table (or wherever the referenced account is stored). |
@@ -212,7 +212,7 @@ Hooks fire after the underlying RPC response has been sent to the client (or aft
 ### Suggested database tables
 
 The `hc` prefix stands for headless-chat. It's suggested to use the following tables:
-`hc_conversations`, `hc_participant_activities`, `hc_messages`, `hc_indicators`, `hc_reactions`, `hc_invites` and, if aliases are configurable, `hc_aliases`. Ensure proper indexing.
+`hc_conversations`, `hc_conversation_participants`, `hc_participant_activities`, `hc_messages`, `hc_indicators`, `hc_reactions`, `hc_invites` and, if aliases are configurable, `hc_aliases`. Ensure proper indexing.
 
 Participant IDs are strings and stringified numbers over UUIDs work fine.
 
@@ -225,7 +225,6 @@ The shape your DB stores and what `onCreateConversation` receives.
 ```ts
 {
     conversationId: string,
-    participants: string[], // Participant IDs
     createdAt: Date,
     lastActivityAt: Date, // Conversations are usually ordered by this; not participant specific
     maxSize: number | null, // null = unbounded, but the global upper cap from rateLimits still applies
@@ -234,10 +233,11 @@ The shape your DB stores and what `onCreateConversation` receives.
 
 #### Conversation
 
-The surfaced shape the client receives.
+The surfaced shape the client receives. `participants` is sourced from your junction table.
 
 ```ts
 ConversationRecord & {
+    participants: string[], // Participant IDs
     lastMessage: Message | null, // Can be null if the conversation has no messages yet
 }
 ```
