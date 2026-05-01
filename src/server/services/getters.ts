@@ -1,21 +1,21 @@
 import type { Alias, Conversation, Invite, Message, ParticipantActivity } from "../../shared/shared-types.js";
 import { getHandler } from "../server-types.js";
-import type { ServerContext } from "../context.js";
+import type { ServerContext, ServiceResult } from "../context.js";
 
-export async function getConversations(ctx: ServerContext, participantId: string): Promise<Conversation[]> {
-    return getHandler(ctx.handlers, "readConversations")(participantId);
+export async function getConversations(ctx: ServerContext, participantId: string): Promise<ServiceResult<Conversation[]>> {
+    return { result: await getHandler(ctx.handlers, "readConversations")(participantId), hooks: [] };
 }
 
-export async function getInvites(ctx: ServerContext, participantId: string): Promise<Invite[]> {
-    return getHandler(ctx.handlers, "readInvites")(participantId);
+export async function getInvites(ctx: ServerContext, participantId: string): Promise<ServiceResult<Invite[]>> {
+    return { result: await getHandler(ctx.handlers, "readInvites")(participantId), hooks: [] };
 }
 
-export async function getAliases(ctx: ServerContext, participantIds: string[]): Promise<Alias[]> {
-    return getHandler(ctx.handlers, "readAliases")(participantIds);
+export async function getAliases(ctx: ServerContext, participantIds: string[]): Promise<ServiceResult<Alias[]>> {
+    return { result: await getHandler(ctx.handlers, "readAliases")(participantIds), hooks: [] };
 }
 
-export async function getParticipantActivities(ctx: ServerContext, participantId: string): Promise<ParticipantActivity[]> {
-    return getHandler(ctx.handlers, "readParticipantActivities")(participantId);
+export async function getParticipantActivities(ctx: ServerContext, participantId: string): Promise<ServiceResult<ParticipantActivity[]>> {
+    return { result: await getHandler(ctx.handlers, "readParticipantActivities")(participantId), hooks: [] };
 }
 
 export async function getMessages(
@@ -25,10 +25,10 @@ export async function getMessages(
     cursorMessageId: string | null,
     after: boolean,
     amount: number,
-): Promise<{ messages: Message[], remainingInDirection: number }> {
+): Promise<ServiceResult<{ messages: Message[], remainingInDirection: number }>> {
     const result = await getHandler(ctx.handlers, "readMessages")(conversationId, cursorMessageId, after, amount);
     await checkUpdateActivity(ctx, conversationId, participantId, result.messages);
-    return result;
+    return { result, hooks: [] };
 }
 
 // Update the participant's last-read pointer if any returned message is newer than the cached pointer

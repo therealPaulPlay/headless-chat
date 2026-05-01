@@ -1,6 +1,7 @@
 import { decodeAndSanitize } from "../shared/serialization.js";
 import { type ClientToServer, isValidScope } from "../shared/protocol.js";
 import { logHandlerError } from "../shared/log.js";
+import type { ServiceResult } from "./context.js";
 import type { Conversation, ConversationRecord, Message, MessageOptions, Reaction, Indicator, Invite, ParticipantActivity, Alias, SystemEvent } from "../shared/shared-types.js";
 import {
     type ServerDispatch,
@@ -109,6 +110,7 @@ export class Server {
     onDeleteInvitesBefore(handler: Handler<[Date], void>) { this.handlers.deleteInvitesBefore = handler; }
 
     onParticipantAuth(handler: Handler<[string, unknown], boolean>) { this.handlers.participantAuth = handler; }
+    onInviteAuth(handler: Handler<[string, string], boolean>) { this.handlers.inviteAuth = handler; }
     onProfanityCheckCensor(handler: Handler<[string], string>) { this.handlers.profanityCheckCensor = handler; }
     onProfanityCheckBlock(handler: Handler<[string], boolean>) { this.handlers.profanityCheckBlock = handler; }
 
@@ -144,18 +146,27 @@ export class Server {
 
     // RPC dispatch -------------------------------------------------------
 
-    // Route to request handlers
+    // Route to request handlers, send response, then run any hooks
     private async handleRequest(participantId: string, requestId: string, method: string, args: unknown[]): Promise<void> {
+        let serviceResult: ServiceResult<unknown>;
         try {
-            const result = await this.invoke(participantId, method, args);
-            this.subscriptions.sendResponse(participantId, requestId, true, result);
+            serviceResult = await this.invoke(participantId, method, args);
+            this.subscriptions.sendResponse(participantId, requestId, true, serviceResult.result);
         } catch (error) {
             const text = error instanceof Error ? error.message : String(error);
             this.subscriptions.sendResponse(participantId, requestId, false, undefined, text);
+            return;
+        }
+        await this.runHooks(serviceResult.hooks);
+    }
+
+    private async runHooks(hooks: ServiceResult<unknown>["hooks"]): Promise<void> {
+        for (const hook of hooks) {
+            try { await hook(); } catch (error) { logHandlerError("hook", error); }
         }
     }
 
-    private invoke(participantId: string, method: string, args: unknown[]): Promise<unknown> | unknown {
+    private invoke(participantId: string, method: string, args: unknown[]): Promise<ServiceResult<unknown>> {
         switch (method) {
             case "createConversation": return conversationsService.createConversation(this.ctx, participantId, args[0] as number | undefined);
             case "createInvite": return conversationsService.createInvite(this.ctx, participantId, args[0] as string, args[1] as string);
@@ -192,8 +203,15 @@ export class Server {
 
     // Admin --------------------------------------------------------------
 
+    // Resolve the admin promise first, run hooks directly afterwards
+    private async runAdmin<T>(work: Promise<ServiceResult<T>>): Promise<T> {
+        const sr = await work;
+        if (sr.hooks.length > 0) setTimeout(() => void this.runHooks(sr.hooks), 0);
+        return sr.result;
+    }
+
     deleteParticipant(participantId: string): Promise<void> {
-        return participantsService.deleteParticipant(this.ctx, participantId);
+        return this.runAdmin(participantsService.deleteParticipant(this.ctx, participantId));
     }
 
     cleanupParticipant(participantId: string): void {
@@ -201,10 +219,33 @@ export class Server {
     }
 
     acceptInvite(conversationId: string, participantId: string): Promise<void> {
-        return conversationsService.acceptInvite(this.ctx, participantId, conversationId);
+        return this.runAdmin(conversationsService.acceptInvite(this.ctx, participantId, conversationId));
     }
 
-    addMessage(conversationId: string, participantId: string, message: string, options: MessageOptions, systemEvent?: SystemEvent): Promise<string> {
-        return messagesService.addMessage(this.ctx, conversationId, participantId, message, options, systemEvent);
+    revokeInvite(conversationId: string, fromParticipantId: string, toParticipantId: string): Promise<void> {
+        return this.runAdmin(conversationsService.revokeInviteByPair(this.ctx, conversationId, fromParticipantId, toParticipantId));
     }
+
+    joinConversation(conversationId: string, participantId: string): Promise<void> {
+        return this.runAdmin(conversationsService.joinConversation(this.ctx, conversationId, participantId));
+    }
+
+    leaveConversation(conversationId: string, participantId: string): Promise<void> {
+        return this.runAdmin(conversationsService.leaveConversation(this.ctx, participantId, conversationId));
+    }
+
+    sendMessage(conversationId: string, participantId: string, message: string, options?: MessageOptions, systemEvent?: SystemEvent): Promise<string> {
+        return this.runAdmin(messagesService.addMessage(this.ctx, conversationId, participantId, message, options, systemEvent));
+    }
+
+    // Hook registration --------------------------------------------
+
+    onAfterMessageCreated(handler: Handler<[Message], void>) { this.handlers.afterMessageCreated = handler; }
+    onAfterMessageDeleted(handler: Handler<[Message], void>) { this.handlers.afterMessageDeleted = handler; }
+    onAfterParticipantJoined(handler: Handler<[string, string], void>) { this.handlers.afterParticipantJoined = handler; }
+    onAfterParticipantLeft(handler: Handler<[string, string], void>) { this.handlers.afterParticipantLeft = handler; }
+    onAfterInviteCreated(handler: Handler<[Invite], void>) { this.handlers.afterInviteCreated = handler; }
+    onAfterInviteDeleted(handler: Handler<[string, string, string], void>) { this.handlers.afterInviteDeleted = handler; }
+    onAfterConversationCreated(handler: Handler<[Conversation], void>) { this.handlers.afterConversationCreated = handler; }
+    onAfterConversationDeleted(handler: Handler<[string], void>) { this.handlers.afterConversationDeleted = handler; }
 }

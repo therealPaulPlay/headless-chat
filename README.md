@@ -131,7 +131,10 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | deleteParticipant(participantId: string) | - | When a user is deleted in your backend, call this method after removing the user from your own table. Removes the participant from all conversations and deletes their invites while messages are kept around. |
 | cleanupParticipant(participantId: string) | - | Drops all server-side subscriptions for the participant. Call this when your transport solution detects a disconnect (e.g. via its own ping/pong or close event) so the server stops attempting to dispatch to them. The participant can resubscribe normally on reconnect. |
 | acceptInvite(conversationId: string, participantId: string) | - | Can be used for auto-accepting invites on behalf of participants, e.g. for participants that are already connected in your own system. |
-| addMessage(conversationId: string, participantId: string, message: string, options: MessageOptions, systemEvent?: SystemEvent) | messageId: string | Post a message on behalf of a participant or post a system message. Bypasses checks. |
+| revokeInvite(conversationId: string, fromParticipantId: string, toParticipantId: string) | - | Server-side revoke that bypasses the ownership check the client-facing path applies. |
+| joinConversation(conversationId: string, participantId: string) | - | Add a participant directly without an invite flow. |
+| leaveConversation(conversationId: string, participantId: string) | - | Remove a participant from a conversation. |
+| sendMessage(conversationId: string, participantId: string, message: string, options?: MessageOptions, systemEvent?: SystemEvent) | messageId: string | Send a message on behalf of a participant or post a system message. Bypasses validation. |
 | stop() | - | Stop all internal timers (indicator cleanup, daily cleanup, rate-limit sweep). |
 
 > [!IMPORTANT]
@@ -187,8 +190,24 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
 | onParticipantAuth(handler: function) | participantId: string, authData: unknown | allow: boolean | Integrate a simple auth check. |
+| onInviteAuth(handler: function) (optional) | fromParticipantId: string, toParticipantId: string | allow: boolean | Gate `createInvite` calls e.g. for blocked participants. Returning false rejects the invite. |
 | onProfanityCheckCensor(handler: function) (optional) | message: string | censoredMessage: string | Normal profanity check where profane words are censored. Must return the (possibly censored) string and must not throw. |
 | onProfanityCheckBlock(handler: function) (optional) | message: string | allow: boolean | Strict profanity check where messages that contain profanity are rejected. Must return a boolean and must not throw. |
+
+**Hooks (all optional):**
+
+Hooks fire after the underlying RPC response has been sent to the client (or after the admin call's awaited promise has resolved). Errors thrown inside them are caught by the library.
+
+| Method | Calls with | Description |
+| ------ | ---------- | ------------|
+| onAfterMessageCreated(handler: function) | message: Message | Fires for both user-sent messages and server-authored system messages. |
+| onAfterMessageDeleted(handler: function) | message: Message | Fires after a soft-delete; `message.deleted` is true. |
+| onAfterParticipantJoined(handler: function) | conversationId: string, participantId: string | Fires after a participant is added (accept-invite or admin join). |
+| onAfterParticipantLeft(handler: function) | conversationId: string, participantId: string | Fires after a participant is removed (leave or admin leave). Also fires when the last participant leaves and the conversation is then deleted. |
+| onAfterInviteCreated(handler: function) | invite: Invite | Fires after a new invite is persisted. |
+| onAfterInviteDeleted(handler: function) | conversationId: string, fromParticipantId: string, toParticipantId: string | Fires after an invite is deleted (revoke, accept, decline, or participant deletion cascade). |
+| onAfterConversationCreated(handler: function) | conversation: Conversation | Fires after a conversation is persisted. |
+| onAfterConversationDeleted(handler: function) | conversationId: string | Fires after the last participant leaves and the conversation is deleted. |
 
 ### Suggested database tables
 

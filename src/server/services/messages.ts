@@ -1,6 +1,6 @@
 import type { Message, MessageOptions, Reaction, SystemEvent } from "../../shared/shared-types.js";
 import { getHandler } from "../server-types.js";
-import { type ServerContext, newId, now } from "../context.js";
+import { type ServerContext, type ServiceResult, fireHook, newId, now } from "../context.js";
 import { applyProfanityChecks, isValidEmoji } from "../validation.js";
 import { removeIndicator } from "./indicators.js";
 
@@ -34,7 +34,7 @@ function buildMessage(participantId: string, conversationId: string, text: strin
     };
 }
 
-export async function sendMessage(ctx: ServerContext, participantId: string, conversationId: string, text: string, options?: MessageOptions): Promise<string> {
+export async function sendMessage(ctx: ServerContext, participantId: string, conversationId: string, text: string, options?: MessageOptions): Promise<ServiceResult<string>> {
     if (typeof text !== "string" || text.length === 0) throw new Error("Message must be a non-empty string");
     ctx.rateLimiter.trackMessage(participantId);
     const finalText = await applyProfanityChecks(ctx.handlers, text);
@@ -44,10 +44,10 @@ export async function sendMessage(ctx: ServerContext, participantId: string, con
 
     const message = buildMessage(participantId, conversationId, finalText, options, null);
     await persistAndFanoutMessage(ctx, message);
-    return message.messageId;
+    return { result: message.messageId, hooks: [() => fireHook(ctx.handlers, "afterMessageCreated", message)] };
 }
 
-export async function editMessage(ctx: ServerContext, participantId: string, messageId: string, text: string): Promise<void> {
+export async function editMessage(ctx: ServerContext, participantId: string, messageId: string, text: string): Promise<ServiceResult<void>> {
     if (typeof text !== "string" || text.length === 0) throw new Error("Message must be a non-empty string");
     ctx.rateLimiter.trackMessage(participantId);
     const finalText = await applyProfanityChecks(ctx.handlers, text);
@@ -66,21 +66,23 @@ export async function editMessage(ctx: ServerContext, participantId: string, mes
     };
     await getHandler(ctx.handlers, "updateMessage")(updated);
     ctx.subscriptions.broadcastMessage(updated);
+    return { result: undefined, hooks: [] };
 }
 
-export async function deleteMessage(ctx: ServerContext, participantId: string, messageId: string): Promise<void> {
+export async function deleteMessage(ctx: ServerContext, participantId: string, messageId: string): Promise<ServiceResult<void>> {
     const existing = await getHandler(ctx.handlers, "readMessage")(messageId);
     if (!existing) throw new Error("Message not found");
     if (existing.participantId !== participantId) throw new Error("Not authorized to delete this message");
-    if (existing.deleted) return;
+    if (existing.deleted) return { result: undefined, hooks: [] };
 
-    // Keep the row so replies and pagination stay consisten
+    // Keep the row so replies and pagination stay consistent
     const tombstoned: Message = { ...existing, deleted: true, modifiedAt: now() };
     await getHandler(ctx.handlers, "updateMessage")(tombstoned);
     ctx.subscriptions.broadcastMessage(tombstoned);
+    return { result: undefined, hooks: [() => fireHook(ctx.handlers, "afterMessageDeleted", tombstoned)] };
 }
 
-export async function addReaction(ctx: ServerContext, participantId: string, messageId: string, content: string): Promise<void> {
+export async function addReaction(ctx: ServerContext, participantId: string, messageId: string, content: string): Promise<ServiceResult<void>> {
     if (!isValidEmoji(content)) throw new Error("Reaction must be a valid unicode emoji");
     const existing = await getHandler(ctx.handlers, "readMessage")(messageId);
     if (!existing) throw new Error("Message not found");
@@ -95,19 +97,21 @@ export async function addReaction(ctx: ServerContext, participantId: string, mes
     // Consumer's onCreateReaction enforces participation and dedup on (messageId, participantId)
     await getHandler(ctx.handlers, "createReaction")(reaction);
     await ctx.subscriptions.broadcastMessageById(messageId);
+    return { result: undefined, hooks: [] };
 }
 
-export async function removeReaction(ctx: ServerContext, participantId: string, reactionId: string): Promise<void> {
+export async function removeReaction(ctx: ServerContext, participantId: string, reactionId: string): Promise<ServiceResult<void>> {
     const reaction = await getHandler(ctx.handlers, "readReaction")(reactionId);
     if (!reaction) throw new Error("Reaction not found");
     if (reaction.participantId !== participantId) throw new Error("Not authorized to remove this reaction");
     await getHandler(ctx.handlers, "deleteReaction")(reactionId);
     await ctx.subscriptions.broadcastMessageById(reaction.messageId);
+    return { result: undefined, hooks: [] };
 }
 
-export async function addMessage(ctx: ServerContext, conversationId: string, participantId: string, text: string, options?: MessageOptions, systemEvent?: SystemEvent): Promise<string> {
+export async function addMessage(ctx: ServerContext, conversationId: string, participantId: string, text: string, options?: MessageOptions, systemEvent?: SystemEvent): Promise<ServiceResult<string>> {
     // Server-side path, bypasses rate limit + profanity check
     const message = buildMessage(participantId, conversationId, text, options, systemEvent ?? null);
     await persistAndFanoutMessage(ctx, message);
-    return message.messageId;
+    return { result: message.messageId, hooks: [() => fireHook(ctx.handlers, "afterMessageCreated", message)] };
 }

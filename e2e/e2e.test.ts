@@ -8,7 +8,13 @@ describe("e2e", () => {
     beforeEach(() => { transport = new FakeTransport(); });
     afterEach(() => { transport.stop(); });
 
-    test("invite -> accept -> send message -> receive via onMessage", async () => {
+    test("invite -> accept -> send message -> receive via onMessage & ensure hooks work", async () => {
+        // Wire up after-hooks before any work happens
+        const conversationsCreated: Conversation[] = [];
+        const messagesCreated: Message[] = [];
+        transport.server.onAfterConversationCreated(c => { conversationsCreated.push(c); });
+        transport.server.onAfterMessageCreated(m => { messagesCreated.push(m); });
+
         const alice = transport.addClient("alice");
         const bob = transport.addClient("bob");
         const conversationId = await alice.createConversation();
@@ -26,6 +32,12 @@ describe("e2e", () => {
         expect(real[0]?.messageId).toBe(messageId);
         expect(real[0]?.message).toBe("hello bob");
         expect(real[0]?.participantId).toBe("alice");
+
+        // afterConversationCreated fired exactly once for the new conversation
+        expect(conversationsCreated.map(c => c.conversationId)).toEqual([conversationId]);
+        // afterMessageCreated fired for the participantJoined system message and the user message
+        expect(messagesCreated.some(m => m.messageId === messageId)).toBe(true);
+        expect(messagesCreated.some(m => m.systemEvent?.type === "participantJoined")).toBe(true);
     });
 
     test("onConversation fires for both participants on create + join", async () => {

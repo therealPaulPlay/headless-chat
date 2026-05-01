@@ -79,8 +79,19 @@ export type Handlers = {
     deleteInvitesBefore?: Handler<[Date], void>,
 
     participantAuth?: Handler<[string, unknown], boolean>,
+    inviteAuth?: Handler<[string, string], boolean>,
     profanityCheckCensor?: Handler<[string], string>,
     profanityCheckBlock?: Handler<[string], boolean>,
+
+    // After hooks (run after the RPC's response is sent off as the last step)
+    afterMessageCreated?: Handler<[Message], void>,
+    afterMessageDeleted?: Handler<[Message], void>,
+    afterParticipantJoined?: Handler<[string, string], void>,
+    afterParticipantLeft?: Handler<[string, string], void>,
+    afterInviteCreated?: Handler<[Invite], void>,
+    afterInviteDeleted?: Handler<[string, string, string], void>,
+    afterConversationCreated?: Handler<[Conversation], void>,
+    afterConversationDeleted?: Handler<[string], void>,
 }
 
 export function getHandler<K extends keyof Handlers>(handlers: Handlers, name: K): NonNullable<Handlers[K]> {
