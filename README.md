@@ -14,6 +14,12 @@ Slightly opinionated core chat logic. No database implementation, no transport i
 - No message search, bring your own if needed
 - No transport-level rate limiting, bring your own
 
+## Install
+
+```bash
+npm install headless-chat
+```
+
 ## Client API
 
 Constructor: `new Client(dispatch: ClientDispatch, participantId: string, getAuthData: GetAuthData)`
