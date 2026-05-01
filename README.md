@@ -58,7 +58,7 @@ A function that takes no parameters and returns `authData: unknown` that is sent
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
 | async getConversations(participantId: string) | conversations: Conversation[] | Get all conversations the participant is in. |
-| async getMessages(conversationId: string, cursorMessageId: `string | null`, after: boolean, amount: number) | { messages: Message[], remainingInDirection: number } | Get up to `amount` messages strictly newer (`after: true`) or strictly older (`after: false`) than the cursor. The cursor message itself is never included. A null cursor returns the newest page. |
+| async getMessages(conversationId: string, cursorMessageId: string \| null, after: boolean, amount: number) | { messages: Message[], remainingInDirection: number } | Get up to `amount` messages strictly newer (`after: true`) or strictly older (`after: false`) than the cursor. The cursor message itself is never included. A null cursor returns the newest page. |
 | async getInvites(participantId: string) | invites: Invite[]| Get all invites, both for you and by you. |
 | async getAliases([participantId: string, participantId...]) | aliases: Alias[] | Get server-defined aliases for participants. This serves as a simple lookup for your server-defined username system. |
 | async getParticipantActivities() | activities: ParticipantActivity[] | Get the calling participant's read state across all their conversations. Used to derive unread counts client-side. |
