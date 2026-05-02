@@ -24,12 +24,17 @@ export class IndicatorStore {
         return [...inner].map(([participantId, ts]) => ({ conversationId, participantId, createdAt: new Date(ts) }));
     }
 
-    sweep(thresholdMs: number): void {
+    // Returns the conversationIds that had at least one entry removed so the caller can re-broadcast their indicators
+    sweep(thresholdMs: number): string[] {
+        const affected: string[] = [];
         for (const [conversationId, inner] of this.byConversation) {
+            let removed = false;
             for (const [participantId, ts] of inner) {
-                if (ts < thresholdMs) inner.delete(participantId);
+                if (ts < thresholdMs) { inner.delete(participantId); removed = true; }
             }
+            if (removed) affected.push(conversationId);
             if (inner.size === 0) this.byConversation.delete(conversationId);
         }
+        return affected;
     }
 }

@@ -161,14 +161,14 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | Method | Calls with | Expected return value | Description |
 | ------ | ---------- | --------------------- | ------------|
 | onReadConversations(handler: function) | participantId: string | conversations: Conversation[] | Should return all conversations from the database that a given participant takes part in, with `lastMessage` populated via a join, ordered by `lastActivityAt` descending. |
-| onReadConversation(handler: function) | conversationId: string | `conversation: Conversation | null` | Should return the conversation by ID with `lastMessage` populated, or `null` if it does not exist. |
+| onReadConversation(handler: function) | conversationId: string | conversation: Conversation \| null | Should return the conversation by ID with `lastMessage` populated, or `null` if it does not exist. |
 | onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages ordered by `createdAt` ascending, each with its `reactions` array populated. The cursor message is never included. With `after: true` return strictly newer, with `after: false` strictly older. The library creates or updates the participant activity if a message newer than the one specified in `lastReadMessageCreatedAt` (cached at runtime) is fetched.
-| onReadMessage(handler: function) | messageId: string | `message: Message | null` | Should return the message by ID with reactions populated, or null. |
-| onReadReaction(handler: function) | reactionId: string | `reaction: Reaction | null` | Should return the reaction by ID, or null. |
+| onReadMessage(handler: function) | messageId: string | message: Message \| null | Should return the message by ID with reactions populated, or null. |
+| onReadReaction(handler: function) | reactionId: string | reaction: Reaction \| null | Should return the reaction by ID, or null. |
 | onReadInvites(handler: function) | participantId: string | invites: Invite[] | Should return all invites created by or created for the provided participant, ordered by `createdAt` descending. |
-| onReadInvite(handler: function) | conversationId: string, toParticipantId: string | `invite: Invite | null` | Should return the invite for the pair, or null. |
+| onReadInvite(handler: function) | conversationId: string, toParticipantId: string | invite: Invite \| null | Should return the invite for the pair, or null. |
 | onReadAliases(handler: function) | participants: string[] | aliases: Alias[] | Should return all aliases for the provided participant IDs. In a simple implementation, this can look up the usernames from an existing users table. |
-| onReadConversationParticipantActivity(handler: function) | conversationId: string, participantId: string | `participantActivity: ParticipantActivity | null` | Should return the participant activity from the database or `null` if it does not exist. |
+| onReadConversationParticipantActivity(handler: function) | conversationId: string, participantId: string | participantActivity: ParticipantActivity \| null | Should return the participant activity from the database or `null` if it does not exist. |
 | onReadParticipantActivities(handler: function) | participantId: string | activities: ParticipantActivity[] | Should return all participant activity rows for the given participant. |
 
 **Update handlers:**

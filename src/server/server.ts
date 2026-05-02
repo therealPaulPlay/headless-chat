@@ -58,7 +58,7 @@ export class Server {
         const indicators = new IndicatorStore();
         this.subscriptions = new Subscriptions(this.dispatch, this.handlers, indicators);
         this.rateLimiter = new RateLimiter(this.rateLimits);
-        this.scheduler = new CleanupScheduler(this.handlers, this.cleanup, this.rateLimiter, this.rateLimits.sweepIntervalSeconds, activityCache, indicators);
+        this.scheduler = new CleanupScheduler(this.handlers, this.cleanup, this.rateLimiter, this.rateLimits.sweepIntervalSeconds, activityCache, indicators, this.subscriptions);
         this.ctx = {
             handlers: this.handlers,
             subscriptions: this.subscriptions,

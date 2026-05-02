@@ -56,8 +56,14 @@ export class Subscriptions {
         for (const scope of [...scopes]) this.remove(participantId, scope);
     }
 
+    // Wraps the consumer-supplied dispatch so a thrown transport never propagates into the library
+    private safeDispatch(participantId: string, payload: unknown): void {
+        try { this.dispatch(participantId, payload); }
+        catch (error) { logError("dispatch", error); }
+    }
+
     sendResponse(participantId: string, requestId: string, ok: boolean, data: unknown, error?: string): void {
-        this.dispatch(participantId, { type: "response", requestId, ok, data, error });
+        this.safeDispatch(participantId, { type: "response", requestId, ok, data, error });
     }
 
     // Targets is an optional iterator of participant IDs, if ommited, it will be distributed to all participants with the scope
@@ -68,10 +74,10 @@ export class Subscriptions {
         const event = { type: "event", scope, data };
         if (targets) {
             for (const participantId of targets) {
-                if (subs.has(participantId)) this.dispatch(participantId, event);
+                if (subs.has(participantId)) this.safeDispatch(participantId, event);
             }
         } else {
-            for (const participantId of subs) this.dispatch(participantId, event);
+            for (const participantId of subs) this.safeDispatch(participantId, event);
         }
     }
 

@@ -144,8 +144,13 @@ describe("e2e", () => {
             expect(afterSet?.length).toBe(2);
 
             // Wait past TTL + at least one sweep tick - alice's and bob's stale indicators should be evicted
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            // Triggering a fresh broadcast lets us observe the post-sweep state, only alice's just-set indicator
+            await new Promise(resolve => setTimeout(resolve, 2500));
+
+            // The sweep itself broadcasts an empty snapshot, no extra action needed
+            const afterSweep = seen.at(-1);
+            expect(afterSweep?.length).toBe(0);
+
+            // A fresh setIndicator emits a snapshot containing only the just-set entry
             await alice.setIndicator(conversationId);
             await tick();
             const afterRefresh = seen.at(-1);

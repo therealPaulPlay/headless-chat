@@ -1,6 +1,7 @@
 import { type Handlers, type ResolvedCleanup, getHandler } from "./server-types.js";
 import type { RateLimiter } from "./rate-limits.js";
 import type { IndicatorStore } from "./indicators-store.js";
+import type { Subscriptions } from "./subscriptions.js";
 import { logError } from "../shared/log.js";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -18,6 +19,7 @@ export class CleanupScheduler {
         private sweepIntervalSeconds: number,
         private activityCache: Map<string, number>,
         private indicators: IndicatorStore,
+        private subscriptions: Subscriptions,
     ) { }
 
     start(): void {
@@ -46,7 +48,9 @@ export class CleanupScheduler {
     }
 
     private runIndicators(): void {
-        this.indicators.sweep(Date.now() - this.cleanup.indicatorTtlSeconds * 1000);
+        // Broadcast affected conversations so subscribers see the post-sweep indicator state
+        const affected = this.indicators.sweep(Date.now() - this.cleanup.indicatorTtlSeconds * 1000);
+        for (const conversationId of affected) this.subscriptions.broadcastIndicators(conversationId);
     }
 
     private async runDaily(): Promise<void> {
