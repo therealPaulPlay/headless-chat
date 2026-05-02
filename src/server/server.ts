@@ -1,4 +1,3 @@
-import { sanitize } from "../shared/serialization.js";
 import { type ClientToServer, isValidScope } from "../shared/protocol.js";
 import { logError } from "../shared/log.js";
 import type { ServiceResult } from "./context.js";
@@ -115,9 +114,7 @@ export class Server {
 
     async receive(data: unknown): Promise<void> {
         if (!data || typeof data !== "object" || typeof (data as { type?: unknown }).type !== "string") return;
-        let message: ClientToServer;
-        try { message = sanitize(data as ClientToServer); }
-        catch (error) { logError("sanitize", error); return; }
+        const message = data as ClientToServer;
 
         // "server" is a reserved sentinel for library-authored system messages, clients cannot claim it
         if (message.participantId === "server") {

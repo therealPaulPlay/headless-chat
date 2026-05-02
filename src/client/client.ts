@@ -1,5 +1,3 @@
-import { sanitize } from "../shared/serialization.js";
-import { logError } from "../shared/log.js";
 import { type ServerToClient, SCOPE } from "../shared/protocol.js";
 import type { Conversation, Invite, Message, MessageOptions, Indicator, Alias, ParticipantActivity } from "../shared/shared-types.js";
 
@@ -42,9 +40,7 @@ export class Client {
 
     receive(data: unknown): void {
         if (!data || typeof data !== "object") return;
-        let message: ServerToClient;
-        try { message = sanitize(data as ServerToClient); }
-        catch (error) { logError("sanitize", error); return; }
+        const message = data as ServerToClient;
 
         // Responses to the requests from the player
         if (message.type === "response") {

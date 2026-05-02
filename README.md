@@ -6,13 +6,13 @@ Slightly opinionated core chat logic. No database implementation, no transport i
 - Robust chat logic with reactions, replies, typing indicators & more
 - Something that works with your own DB
 - Freedom to choose your protocol (WS & SSE recommended)
-- Sanitization handled for you
 
 #### Limitations
 
 - Assumes sane conversation and invite amounts (they are not paginated)
 - No message search, bring your own if needed
 - No transport-level rate limiting, bring your own
+- No string sanitization built-in
 
 ## Install
 
