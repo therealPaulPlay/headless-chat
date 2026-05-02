@@ -208,6 +208,10 @@ export class Server {
         return sr.result;
     }
 
+    createConversation(creatorParticipantId: string, maxSize?: number): Promise<string> {
+        return this.runAdmin(conversationsService.createConversation(this.ctx, creatorParticipantId, maxSize));
+    }
+
     deleteParticipant(participantId: string): Promise<void> {
         return this.runAdmin(participantsService.deleteParticipant(this.ctx, participantId));
     }

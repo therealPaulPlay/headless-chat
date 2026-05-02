@@ -136,6 +136,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 **Admin:**
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
+| createConversation(creatorParticipantId: string, maxSize?: number) | conversationId: string | Create a conversation on behalf of a participant. |
 | deleteParticipant(participantId: string) | - | When a user is deleted in your backend, call this method after removing the user from your own table. Removes the participant from all conversations and deletes their invites while messages are kept around. |
 | cleanupParticipant(participantId: string) | - | Drops all server-side subscriptions for the participant. Call this when your transport solution detects a disconnect (e.g. via its own ping/pong or close event) so the server stops attempting to dispatch to them. The participant can resubscribe normally on reconnect. |
 | acceptInvite(conversationId: string, participantId: string) | - | Can be used for auto-accepting invites on behalf of participants, e.g. for participants that are already connected in your own system. |
