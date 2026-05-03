@@ -14,6 +14,20 @@ async function joinFlow(ctx: ServerContext, conversationId: string, participantI
     return [() => fireHook(ctx.handlers, "afterParticipantJoined", conversationId, participantId), ...sysMsg.hooks];
 }
 
+// Emits side-effects for an already-deleted conversation, broadcasts now and returns hooks to fire later
+// Use when the rows have already been removed
+export function emitConversationDeleted(ctx: ServerContext, conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[]): AfterHook[] {
+    ctx.subscriptions.broadcastConversationDeleted(conversationId, formerParticipants);
+    for (const invite of deletedInvites) {
+        ctx.subscriptions.broadcastInviteDeleted(conversationId, invite.fromParticipantId, invite.toParticipantId);
+    }
+    const hooks: AfterHook[] = [() => fireHook(ctx.handlers, "afterConversationDeleted", conversationId)];
+    for (const invite of deletedInvites) {
+        hooks.push(() => fireHook(ctx.handlers, "afterInviteDeleted", conversationId, invite.fromParticipantId, invite.toParticipantId));
+    }
+    return hooks;
+}
+
 export async function createConversation(ctx: ServerContext, participantId: string, maxSize?: number): Promise<ServiceResult<string>> {
     const conversationId = newId();
     const record: ConversationRecord = {
@@ -138,15 +152,11 @@ export async function leaveConversation(ctx: ServerContext, participantId: strin
 
     if (conversation.participants.length === 1) {
         // Delete conversation if now empty
-        await getHandler(ctx.handlers, "deleteConversationWithMessagesAndReactions")(conversationId);
-        await getHandler(ctx.handlers, "deleteConversationParticipantActivities")([conversationId], conversation.participants);
-        ctx.subscriptions.broadcastConversationDeleted(conversationId, conversation.participants);
+        const { deletedInvites } = await getHandler(ctx.handlers, "deleteConversationWithMessagesReactionsInvitesAndActivities")(conversationId);
+        const deleteHooks = emitConversationDeleted(ctx, conversationId, conversation.participants, deletedInvites);
         return {
             result: undefined,
-            hooks: [
-                () => fireHook(ctx.handlers, "afterParticipantLeft", conversationId, participantId),
-                () => fireHook(ctx.handlers, "afterConversationDeleted", conversationId),
-            ],
+            hooks: [() => fireHook(ctx.handlers, "afterParticipantLeft", conversationId, participantId), ...deleteHooks],
         };
     }
 

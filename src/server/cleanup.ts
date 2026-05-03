@@ -1,7 +1,6 @@
-import { type Handlers, type ResolvedCleanup, getHandler } from "./server-types.js";
-import type { RateLimiter } from "./rate-limits.js";
-import type { IndicatorStore } from "./indicators-store.js";
-import type { Subscriptions } from "./subscriptions.js";
+import { type ResolvedCleanup, getHandler } from "./server-types.js";
+import { type ServerContext, fireHook } from "./context.js";
+import { emitConversationDeleted } from "./services/conversations.js";
 import { logError } from "../shared/log.js";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -13,13 +12,9 @@ export class CleanupScheduler {
     private activityCacheTimer: ReturnType<typeof setInterval> | null = null;
 
     constructor(
-        private handlers: Handlers,
+        private ctx: ServerContext,
         private cleanup: ResolvedCleanup,
-        private rateLimiter: RateLimiter,
         private sweepIntervalSeconds: number,
-        private activityCache: Map<string, number>,
-        private indicators: IndicatorStore,
-        private subscriptions: Subscriptions,
     ) { }
 
     start(): void {
@@ -29,10 +24,10 @@ export class CleanupScheduler {
         this.dailyTimer = setInterval(() => void this.runDaily(), ONE_DAY_MS);
         this.dailyTimer.unref?.();
 
-        this.sweepTimer = setInterval(() => this.rateLimiter.sweep(), this.sweepIntervalSeconds * 1000);
+        this.sweepTimer = setInterval(() => this.ctx.rateLimiter.sweep(), this.sweepIntervalSeconds * 1000);
         this.sweepTimer.unref?.();
 
-        this.activityCacheTimer = setInterval(() => this.activityCache.clear(), this.cleanup.activityCacheLifetimeMinutes * 60 * 1000);
+        this.activityCacheTimer = setInterval(() => this.ctx.activityCache.clear(), this.cleanup.activityCacheLifetimeMinutes * 60 * 1000);
         this.activityCacheTimer.unref?.();
     }
 
@@ -49,26 +44,37 @@ export class CleanupScheduler {
 
     private runIndicators(): void {
         // Broadcast affected conversations so subscribers see the post-sweep indicator state
-        const affected = this.indicators.sweep(Date.now() - this.cleanup.indicatorTtlSeconds * 1000);
-        for (const conversationId of affected) this.subscriptions.broadcastIndicators(conversationId);
+        const affected = this.ctx.indicators.sweep(Date.now() - this.cleanup.indicatorTtlSeconds * 1000);
+        for (const conversationId of affected) this.ctx.subscriptions.broadcastIndicators(conversationId);
     }
 
     private async runDaily(): Promise<void> {
         const now = Date.now();
         if (this.cleanup.messageAfterDays && this.cleanup.messageAfterDays > 0) {
-            const handler = getHandler(this.handlers, "deleteMessagesBefore");
+            const handler = getHandler(this.ctx.handlers, "deleteMessagesBefore");
             try { await handler(new Date(now - this.cleanup.messageAfterDays * ONE_DAY_MS)); }
             catch (error) { logError("deleteMessagesBefore", error); }
         }
         if (this.cleanup.conversationAfterInactiveDays && this.cleanup.conversationAfterInactiveDays > 0) {
-            const handler = getHandler(this.handlers, "deleteInactiveConversationsBefore");
-            try { await handler(new Date(now - this.cleanup.conversationAfterInactiveDays * ONE_DAY_MS)); }
-            catch (error) { logError("deleteInactiveConversationsBefore", error); }
+            const handler = getHandler(this.ctx.handlers, "deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore");
+            try {
+                const { deletedConversations } = await handler(new Date(now - this.cleanup.conversationAfterInactiveDays * ONE_DAY_MS));
+                for (const c of deletedConversations) {
+                    // Handler already deleted the rows, just emit the side-effects
+                    const hooks = emitConversationDeleted(this.ctx, c.conversationId, c.formerParticipants, c.deletedInvites);
+                    for (const hook of hooks) await hook();
+                }
+            } catch (error) { logError("deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore", error); }
         }
         if (this.cleanup.inviteAfterDays && this.cleanup.inviteAfterDays > 0) {
-            const handler = getHandler(this.handlers, "deleteInvitesBefore");
-            try { await handler(new Date(now - this.cleanup.inviteAfterDays * ONE_DAY_MS)); }
-            catch (error) { logError("deleteInvitesBefore", error); }
+            const handler = getHandler(this.ctx.handlers, "deleteInvitesBefore");
+            try {
+                const { deletedInvites } = await handler(new Date(now - this.cleanup.inviteAfterDays * ONE_DAY_MS));
+                for (const invite of deletedInvites) {
+                    this.ctx.subscriptions.broadcastInviteDeleted(invite.conversationId, invite.fromParticipantId, invite.toParticipantId);
+                    fireHook(this.ctx.handlers, "afterInviteDeleted", invite.conversationId, invite.fromParticipantId, invite.toParticipantId);
+                }
+            } catch (error) { logError("deleteInvitesBefore", error); }
         }
     }
 }

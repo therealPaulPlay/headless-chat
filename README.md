@@ -13,6 +13,7 @@ Slightly opinionated core chat logic. No database implementation, no transport i
 - No message search, bring your own if needed
 - No transport-level rate limiting, bring your own
 - No string sanitization built-in
+- The daily `deleteMessagesBefore` cleanup deletes without updating subscribers
 
 ## Install
 
@@ -118,7 +119,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
     indicatorCleanupIntervalSeconds?: number, // Defaults to 5, how often the sweep runs
     messageAfterDays?: number, // Defaults to null = disabled
     conversationAfterInactiveDays?: number, // Defaults to null = disabled, inactive means no new messages have been sent
-    inviteAfterDays?: number, // Defaults to 7, can be set to null = disabled
+    inviteAfterDays?: number, // Defaults to null = disabled
     activityCacheLifetimeMinutes?: number, // Period after which the participant-activity in-memory cache is (fully) cleared
 }
 ```
@@ -160,7 +161,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onCreateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | Should create a participant activity entry in the database. Guard the insert with a participation check so activity is not created for participants who concurrently left the conversation. |
 
 **Read handlers:**
-| Method | Calls with | Expected return value | Description |
+| Method | Calls with | Should return | Description |
 | ------ | ---------- | --------------------- | ------------|
 | onReadConversations(handler: function) | participantId: string | conversations: Conversation[] | Should return all conversations from the database that a given participant takes part in, with `lastMessage` populated via a join, ordered by `lastActivityAt` descending. |
 | onReadConversation(handler: function) | conversationId: string | conversation: Conversation \| null | Should return the conversation by ID with `lastMessage` populated, or `null` if it does not exist. |
@@ -182,18 +183,18 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onUpdateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | Should update the provided participant activity in the database. Guard the update with a participation check so activity is not written back for participants who concurrently left the conversation. |
 
 **Delete handlers:**
-| Method | Calls with | Description |
-| ------ | ---------- | ------------|
-| onDeleteReaction(handler: function) | reactionId: string | Should delete the specified reaction in the database. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
-| onDeleteConversationWithMessagesAndReactions(handler: function) | conversationId: string | Should delete the conversation, all its messages, and all reactions to those messages. Recommended to wrap in a single transaction with three statements: delete reactions joined to messages by `messageId` filtered by `conversationId`, then delete messages by `conversationId`, then delete the conversation by `conversationId`. |
-| onDeleteInvites(handler: function) | invites: { conversationId: string, toParticipantId: string }[] | Should delete the provided invites in the database. |
-| onDeleteConversationParticipantActivities(handler: function) |  conversationIds: string[], participantIds: string[] | Should delete all matching activities. Multiple participants are provided when a conversation gets deleted, multiple conversations are provided when a participant leaves (potentially through propagation of `deleteParticipant`). |
-| onDeleteMessagesBefore(handler: function) | thresholdDate: Date | Should delete all messages whose `createdAt` is before `thresholdDate`, plus their reactions. |
-| onDeleteInactiveConversationsBefore(handler: function) | thresholdDate: Date | Should delete all conversations whose `lastActivityAt` is before `thresholdDate`, plus their messages and reactions. |
-| onDeleteInvitesBefore(handler: function) | thresholdDate: Date | Should delete all invites whose `createdAt` is before `thresholdDate`. |
+| Method | Calls with | Should return | Description |
+| ------ | ---------- | --------------------- | ------------|
+| onDeleteReaction(handler: function) | reactionId: string | - | Should delete the specified reaction in the database. After the handler completes, the library re-reads the message and fires `onMessage` to subscribers. |
+| onDeleteConversationWithMessagesReactionsInvitesAndActivities(handler: function) | conversationId: string | { deletedInvites: { fromParticipantId: string, toParticipantId: string }[] } | Should atomically delete the conversation, its messages, reactions, outstanding invites, participant activities, and participants. Capture and return the deleted invite pairs. |
+| onDeleteInvites(handler: function) | invites: { conversationId: string, toParticipantId: string }[] | - | Should delete the provided invites in the database. |
+| onDeleteConversationParticipantActivities(handler: function) |  conversationIds: string[], participantIds: string[] | - | Should delete all matching activities. Multiple participants are provided when a conversation gets deleted, multiple conversations are provided when a participant leaves (potentially through propagation of `deleteParticipant`). |
+| onDeleteMessagesBefore(handler: function) | thresholdDate: Date | - | Should delete all messages whose `createdAt` is before `thresholdDate`, plus their reactions. |
+| onDeleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore(handler: function) | thresholdDate: Date | { deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] } | Bulk variant of the single-conversation handler above. Should atomically delete every conversation whose `lastActivityAt` is before `thresholdDate`, along with its messages, reactions, outstanding invites, participant activities, and participants. Capture and return the participants and invite pairs per deleted conversation. |
+| onDeleteInvitesBefore(handler: function) | thresholdDate: Date | { deletedInvites: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] } | Should atomically delete all invites whose `createdAt` is before `thresholdDate`. Capture and return the deleted invite triples. |
 
 **Validation handlers:**
-| Method | Calls with | Expected return value | Description |
+| Method | Calls with | Should return | Description |
 | ------ | ---------- | --------------------- | ------------|
 | onParticipantAuth(handler: function) | participantId: string, authData: unknown | allow: boolean | Integrate a simple auth check. |
 | onInviteAuth(handler: function) (optional) | fromParticipantId: string, toParticipantId: string | allow: boolean | Gate `createInvite` calls e.g. for blocked participants. Returning false rejects the invite. |

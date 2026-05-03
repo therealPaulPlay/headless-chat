@@ -49,7 +49,7 @@ export class Server {
             indicatorCleanupIntervalSeconds: (cleanup.indicatorCleanupIntervalSeconds && cleanup.indicatorCleanupIntervalSeconds > 0) ? cleanup.indicatorCleanupIntervalSeconds : 5,
             messageAfterDays: cleanup.messageAfterDays ?? null,
             conversationAfterInactiveDays: cleanup.conversationAfterInactiveDays ?? null,
-            inviteAfterDays: cleanup.inviteAfterDays ?? 7,
+            inviteAfterDays: cleanup.inviteAfterDays ?? null,
             activityCacheLifetimeMinutes: cleanup.activityCacheLifetimeMinutes ?? 10,
         };
 
@@ -57,7 +57,6 @@ export class Server {
         const indicators = new IndicatorStore();
         this.subscriptions = new Subscriptions(this.dispatch, this.handlers, indicators);
         this.rateLimiter = new RateLimiter(this.rateLimits);
-        this.scheduler = new CleanupScheduler(this.handlers, this.cleanup, this.rateLimiter, this.rateLimits.sweepIntervalSeconds, activityCache, indicators, this.subscriptions);
         this.ctx = {
             handlers: this.handlers,
             subscriptions: this.subscriptions,
@@ -66,6 +65,7 @@ export class Server {
             activityCache,
             indicators,
         };
+        this.scheduler = new CleanupScheduler(this.ctx, this.cleanup, this.rateLimits.sweepIntervalSeconds);
         this.scheduler.start();
     }
 
@@ -98,12 +98,12 @@ export class Server {
     onUpdateConversationParticipantActivity(handler: Handler<[ParticipantActivity], void>) { this.handlers.updateConversationParticipantActivity = handler; }
 
     onDeleteReaction(handler: Handler<[string], void>) { this.handlers.deleteReaction = handler; }
-    onDeleteConversationWithMessagesAndReactions(handler: Handler<[string], void>) { this.handlers.deleteConversationWithMessagesAndReactions = handler; }
+    onDeleteConversationWithMessagesReactionsInvitesAndActivities(handler: Handler<[string], { deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }>) { this.handlers.deleteConversationWithMessagesReactionsInvitesAndActivities = handler; }
     onDeleteInvites(handler: Handler<[{ conversationId: string, toParticipantId: string }[]], void>) { this.handlers.deleteInvites = handler; }
     onDeleteConversationParticipantActivities(handler: Handler<[string[], string[]], void>) { this.handlers.deleteConversationParticipantActivities = handler; }
     onDeleteMessagesBefore(handler: Handler<[Date], void>) { this.handlers.deleteMessagesBefore = handler; }
-    onDeleteInactiveConversationsBefore(handler: Handler<[Date], void>) { this.handlers.deleteInactiveConversationsBefore = handler; }
-    onDeleteInvitesBefore(handler: Handler<[Date], void>) { this.handlers.deleteInvitesBefore = handler; }
+    onDeleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore(handler: Handler<[Date], { deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] }>) { this.handlers.deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore = handler; }
+    onDeleteInvitesBefore(handler: Handler<[Date], { deletedInvites: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] }>) { this.handlers.deleteInvitesBefore = handler; }
 
     onParticipantAuth(handler: Handler<[string, unknown], boolean>) { this.handlers.participantAuth = handler; }
     onInviteAuth(handler: Handler<[string, string], boolean>) { this.handlers.inviteAuth = handler; }

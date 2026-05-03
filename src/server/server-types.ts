@@ -68,12 +68,12 @@ export type Handlers = {
     updateConversationParticipantActivity?: Handler<[ParticipantActivity], void>,
 
     deleteReaction?: Handler<[string], void>,
-    deleteConversationWithMessagesAndReactions?: Handler<[string], void>,
+    deleteConversationWithMessagesReactionsInvitesAndActivities?: Handler<[string], { deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }>,
     deleteInvites?: Handler<[{ conversationId: string, toParticipantId: string }[]], void>,
     deleteConversationParticipantActivities?: Handler<[string[], string[]], void>,
     deleteMessagesBefore?: Handler<[Date], void>,
-    deleteInactiveConversationsBefore?: Handler<[Date], void>,
-    deleteInvitesBefore?: Handler<[Date], void>,
+    deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore?: Handler<[Date], { deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] }>,
+    deleteInvitesBefore?: Handler<[Date], { deletedInvites: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] }>,
 
     participantAuth?: Handler<[string, unknown], boolean>,
     inviteAuth?: Handler<[string, string], boolean>,

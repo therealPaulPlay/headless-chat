@@ -207,6 +207,66 @@ describe("e2e", () => {
         expect(conversationEvents.some(e => e.conversationId === conversationId && e.data === null)).toBe(true);
     });
 
+    test("leave that auto-deletes the conversation also removes invites, messages, reactions and activities and notifies their subscribers", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const charlie = transport.addClient("charlie");
+
+        const conversationId = await alice.createConversation();
+        // Outstanding invite for an absent participant that should be cleaned up when alice leaves
+        await alice.createInvite(conversationId, "bob");
+
+        // Alice sends a message and reacts to it so we have messages + reactions + activities to clean up
+        const messageId = await alice.sendMessage(conversationId, "hello");
+        await alice.addReaction(messageId, "👍");
+        await alice.getMessages(conversationId, null, false, 10);
+        await tick();
+        expect(transport.store.messages.size).toBeGreaterThan(0);
+        expect([...transport.store.messages.values()].some(m => m.reactions.length > 0)).toBe(true);
+        expect((await alice.getParticipantActivities()).some(a => a.conversationId === conversationId)).toBe(true);
+
+        // Subscribers wired BEFORE the leave so we capture the deletion events
+        const aliceInviteEvents: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+        const bobInviteEvents: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+        const charlieInviteEvents: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+        await alice.onInvite(e => aliceInviteEvents.push(e));
+        await bob.onInvite(e => bobInviteEvents.push(e));
+        await charlie.onInvite(e => charlieInviteEvents.push(e));
+
+        const aliceConvEvents: { conversationId: string, data: Conversation | null }[] = [];
+        await alice.onConversation(e => aliceConvEvents.push(e));
+
+        const inviteDeletedHooks: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] = [];
+        const conversationDeletedHooks: string[] = [];
+        transport.server.onAfterInviteDeleted((conversationId, fromParticipantId, toParticipantId) => {
+            inviteDeletedHooks.push({ conversationId, fromParticipantId, toParticipantId });
+        });
+        transport.server.onAfterConversationDeleted(conversationId => {
+            conversationDeletedHooks.push(conversationId);
+        });
+
+        await alice.leaveConversation(conversationId);
+        await tick();
+
+        // Conversation gone for the leaver
+        expect(aliceConvEvents.some(e => e.conversationId === conversationId && e.data === null)).toBe(true);
+        // Invite-deleted broadcast reached inviter (alice) and invitee (bob), but not unrelated charlie
+        expect(aliceInviteEvents.some(e => e.conversationId === conversationId && e.toParticipantId === "bob" && e.data === null)).toBe(true);
+        expect(bobInviteEvents.some(e => e.conversationId === conversationId && e.toParticipantId === "bob" && e.data === null)).toBe(true);
+        expect(charlieInviteEvents.some(e => e.conversationId === conversationId)).toBe(false);
+
+        // Hooks fired for both deletions
+        expect(conversationDeletedHooks).toContain(conversationId);
+        expect(inviteDeletedHooks.some(h => h.conversationId === conversationId && h.fromParticipantId === "alice" && h.toParticipantId === "bob")).toBe(true);
+
+        // Underlying store no longer has the conversation, its messages, reactions, invites, or activities
+        expect(transport.store.conversations.has(conversationId)).toBe(false);
+        expect([...transport.store.messages.values()].some(m => m.conversationId === conversationId)).toBe(false);
+        expect([...transport.store.messages.values()].some(m => m.reactions.length > 0)).toBe(false);
+        expect(transport.store.invites.some(i => i.conversation.conversationId === conversationId)).toBe(false);
+        expect((await alice.getParticipantActivities()).some(a => a.conversationId === conversationId)).toBe(false);
+    });
+
     test("rate limits message sends", async () => {
         const tight = new FakeTransport({ messageLimitPerSecond: 2 });
         try {

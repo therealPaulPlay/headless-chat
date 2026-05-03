@@ -28,6 +28,25 @@ export class InMemoryStore {
         return this.conversationParticipants.get(conversationId)?.has(participantId) ?? false;
     }
 
+    // Mirrors the consumer's transaction, used by both single-conversation and bulk delete handlers
+    // Returns the invite pairs that were deleted so the library can broadcast and fire hooks
+    private deleteConversationAndReturnInvites(conversationId: string): { fromParticipantId: string, toParticipantId: string }[] {
+        const invitesForConversation = this.invites.filter(i => i.conversation.conversationId === conversationId);
+        const deletedInvites = invitesForConversation.map(i => ({ fromParticipantId: i.fromParticipantId, toParticipantId: i.toParticipantId }));
+
+        for (const [id, message] of this.messages) {
+            if (message.conversationId === conversationId) this.messages.delete(id);
+        }
+        this.invites = this.invites.filter(i => i.conversation.conversationId !== conversationId);
+        for (const [key, activity] of this.activities) {
+            if (activity.conversationId === conversationId) this.activities.delete(key);
+        }
+        this.conversationParticipants.delete(conversationId);
+        this.conversations.delete(conversationId);
+
+        return deletedInvites;
+    }
+
     register(server: Server): void {
 
         // Create handlers -------------------------------------------------------------------
@@ -178,10 +197,9 @@ export class InMemoryStore {
                 if (idx >= 0) { message.reactions.splice(idx, 1); return; }
             }
         });
-        server.onDeleteConversationWithMessagesAndReactions(conversationId => {
-            for (const [id, m] of this.messages) if (m.conversationId === conversationId) this.messages.delete(id);
-            this.conversations.delete(conversationId);
-            this.conversationParticipants.delete(conversationId);
+        server.onDeleteConversationWithMessagesReactionsInvitesAndActivities(conversationId => {
+            const deletedInvites = this.deleteConversationAndReturnInvites(conversationId);
+            return { deletedInvites };
         });
         server.onDeleteInvites(invites => {
             this.invites = this.invites.filter(existing => !invites.some(target => target.conversationId === existing.conversation.conversationId && target.toParticipantId === existing.toParticipantId));
@@ -198,11 +216,26 @@ export class InMemoryStore {
         server.onDeleteMessagesBefore(thresholdDate => {
             for (const [id, m] of this.messages) if (m.createdAt.getTime() < thresholdDate.getTime()) this.messages.delete(id);
         });
-        server.onDeleteInactiveConversationsBefore(thresholdDate => {
-            for (const [id, c] of this.conversations) if (c.lastActivityAt.getTime() < thresholdDate.getTime()) this.conversations.delete(id);
+        server.onDeleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore(thresholdDate => {
+            const deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] = [];
+            for (const [conversationId, conversation] of [...this.conversations]) {
+                if (conversation.lastActivityAt.getTime() >= thresholdDate.getTime()) continue;
+
+                const formerParticipants = [...(this.conversationParticipants.get(conversationId) ?? [])];
+                const deletedInvites = this.deleteConversationAndReturnInvites(conversationId);
+                deletedConversations.push({ conversationId, formerParticipants, deletedInvites });
+            }
+            return { deletedConversations };
         });
         server.onDeleteInvitesBefore(thresholdDate => {
+            const expired = this.invites.filter(i => i.createdAt.getTime() < thresholdDate.getTime());
             this.invites = this.invites.filter(i => i.createdAt.getTime() >= thresholdDate.getTime());
+            const deletedInvites = expired.map(i => ({
+                conversationId: i.conversation.conversationId,
+                fromParticipantId: i.fromParticipantId,
+                toParticipantId: i.toParticipantId,
+            }));
+            return { deletedInvites };
         });
 
         // Validation handlers ------------------------------------------------
