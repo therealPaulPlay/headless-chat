@@ -136,6 +136,14 @@ export class InMemoryStore {
             const message = this.messages.get(messageId);
             return message ? { ...message, reactions: [...message.reactions] } : null;
         });
+        server.onReadConversationLastMessage(conversationId => {
+            let latest: Message | null = null;
+            for (const message of this.messages.values()) {
+                if (message.conversationId !== conversationId) continue;
+                if (!latest || message.createdAt.getTime() >= latest.createdAt.getTime()) latest = message;
+            }
+            return latest ? { messageId: latest.messageId, createdAt: latest.createdAt } : null;
+        });
         server.onReadReaction(reactionId => {
             for (const message of this.messages.values()) {
                 const reaction = message.reactions.find(r => r.reactionId === reactionId);

@@ -15,7 +15,12 @@ export async function getAliases(ctx: ServerContext, participantIds: string[]): 
 }
 
 export async function getParticipantActivities(ctx: ServerContext, participantId: string): Promise<ServiceResult<ParticipantActivity[]>> {
-    return { result: await getHandler(ctx.handlers, "readParticipantActivities")(participantId), hooks: [] };
+    const result = await getHandler(ctx.handlers, "readParticipantActivities")(participantId);
+    // Populate or update the activity cache
+    for (const activity of result) {
+        ctx.activityCache.set(`${activity.conversationId}|${participantId}`, activity.lastReadMessageCreatedAt.getTime());
+    }
+    return { result, hooks: [] };
 }
 
 export async function getMessages(
@@ -31,45 +36,37 @@ export async function getMessages(
     return { result, hooks: [] };
 }
 
-// Mark the conversation's latest message as read for the participant
-// Used by the unsubscribe path (offMessage / cleanupParticipant) to capture progress made via the live message subscription
-export async function markConversationRead(ctx: ServerContext, conversationId: string, participantId: string): Promise<void> {
-    const conversation = await getHandler(ctx.handlers, "readConversation")(conversationId);
-    if (!conversation || !conversation.lastMessage) return;
-    await checkUpdateActivity(ctx, conversationId, participantId, [conversation.lastMessage]);
-}
-
-// Update the participant's last-read pointer if any returned message is newer than the cached pointer
-// Cache value 0 means no DB row yet, >0 means a row exists with that timestamp
-async function checkUpdateActivity(ctx: ServerContext, conversationId: string, participantId: string, messages: Message[]): Promise<void> {
+// Update the participant's last-read message if any of the provided messages is newer than the cached one
+export async function checkUpdateActivity(ctx: ServerContext, conversationId: string, participantId: string, messages: { messageId: string, createdAt: Date }[]): Promise<void> {
     if (messages.length === 0) return;
 
-    // Find the newest message of the provided ones
-    let newest: Message | null = null;
+    // Find the latest message of the provided ones
+    let latestMessage: { messageId: string, createdAt: Date } | null = null;
     for (const message of messages) {
-        if (!newest || message.createdAt.getTime() > newest.createdAt.getTime()) newest = message;
+        if (!latestMessage || message.createdAt.getTime() > latestMessage.createdAt.getTime()) latestMessage = message;
     }
-    if (!newest) return; // Only really needed for Typescript's not null checker, other than that redundant
+    if (!latestMessage) return; // Only really needed for Typescript's not null checker, other than that redundant
 
     const cacheKey = `${conversationId}|${participantId}`;
-    let cachedTs = ctx.activityCache.get(cacheKey);
-    if (cachedTs === undefined) {
-        const current = await getHandler(ctx.handlers, "readConversationParticipantActivity")(conversationId, participantId);
-        cachedTs = current?.lastReadMessageCreatedAt?.getTime() ?? 0;
-        ctx.activityCache.set(cacheKey, cachedTs);
+    let cachedReadTs = ctx.activityCache.get(cacheKey);
+    if (cachedReadTs === undefined) {
+        const stored = await getHandler(ctx.handlers, "readConversationParticipantActivity")(conversationId, participantId);
+        cachedReadTs = stored?.lastReadMessageCreatedAt?.getTime() ?? 0;
+        ctx.activityCache.set(cacheKey, cachedReadTs);
     }
 
-    const newestTs = newest.createdAt.getTime();
-    if (newestTs <= cachedTs) return;
+    const latestMessageTs = latestMessage.createdAt.getTime();
+    if (latestMessageTs <= cachedReadTs) return;
 
-    const next: ParticipantActivity = {
+    const updatedActivity: ParticipantActivity = {
         conversationId,
         participantId,
-        lastReadMessageId: newest.messageId,
-        lastReadMessageCreatedAt: newest.createdAt,
+        lastReadMessageId: latestMessage.messageId,
+        lastReadMessageCreatedAt: latestMessage.createdAt,
     };
     // Both create and update are guarded by a participation check on the consumer's side
-    if (cachedTs === 0) await getHandler(ctx.handlers, "createConversationParticipantActivity")(next);
-    else await getHandler(ctx.handlers, "updateConversationParticipantActivity")(next);
-    ctx.activityCache.set(cacheKey, newestTs);
+    if (cachedReadTs === 0) await getHandler(ctx.handlers, "createConversationParticipantActivity")(updatedActivity);
+    else await getHandler(ctx.handlers, "updateConversationParticipantActivity")(updatedActivity);
+    ctx.activityCache.set(cacheKey, latestMessageTs);
+    ctx.subscriptions.broadcastParticipantActivity(updatedActivity);
 }

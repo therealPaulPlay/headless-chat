@@ -44,7 +44,8 @@ export type Scope =
     | { kind: "message", conversationId: string }
     | { kind: "indicators", conversationId: string }
     | { kind: "conversation" }
-    | { kind: "invite" };
+    | { kind: "invite" }
+    | { kind: "participantActivity" };
 
 // Wire encoding
 // Per-conversation scopes serialize as `${kind}:${conversationId}`, global scopes as just `${kind}`
@@ -54,12 +55,14 @@ export function encodeScope(scope: Scope): string {
         case "indicators": return `indicators:${scope.conversationId}`;
         case "conversation": return "conversation";
         case "invite": return "invite";
+        case "participantActivity": return "participantActivity";
     }
 }
 
 export function decodeScope(scope: string): Scope | null {
     if (scope === "conversation") return { kind: "conversation" };
     if (scope === "invite") return { kind: "invite" };
+    if (scope === "participantActivity") return { kind: "participantActivity" };
     if (scope.startsWith("message:")) return { kind: "message", conversationId: scope.slice("message:".length) };
     if (scope.startsWith("indicators:")) return { kind: "indicators", conversationId: scope.slice("indicators:".length) };
     return null;

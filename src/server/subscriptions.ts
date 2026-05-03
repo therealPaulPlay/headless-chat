@@ -1,9 +1,9 @@
 import { type Scope, encodeScope } from "../shared/protocol.js";
 import { type Handlers, type ServerDispatch, getHandler } from "./server-types.js";
-import type { Conversation, Invite, Message } from "../shared/shared-types.js";
+import type { Conversation, Invite, Message, ParticipantActivity } from "../shared/shared-types.js";
 import type { IndicatorStore } from "./indicators-store.js";
 import type { ServerContext } from "./context.js";
-import { markConversationRead } from "./services/getters.js";
+import { checkUpdateActivity } from "./services/getters.js";
 import { logError } from "../shared/log.js";
 
 export class Subscriptions {
@@ -62,10 +62,14 @@ export class Subscriptions {
             if (participantScopes.size === 0) this.byParticipant.delete(participantId);
         }
 
-        // Unsubscribing from a conversation's message scope marks the conversation's latest message as read
+        // Update participant activity to last message read over the subscription
         if (scope.kind === "message") {
-            markConversationRead(this.ctx, scope.conversationId, participantId)
-                .catch(error => logError("markConversationRead", error));
+            const conversationId = scope.conversationId;
+            (async () => {
+                const lastMessage = await getHandler(this.handlers, "readConversationLastMessage")(conversationId);
+                if (!lastMessage) return; // Empty conversation, exit
+                await checkUpdateActivity(this.ctx, conversationId, participantId, [lastMessage]);
+            })().catch(error => logError("markConversationRead", error));
         }
     }
 
@@ -104,6 +108,22 @@ export class Subscriptions {
 
     broadcastMessage(message: Message): void {
         this.emit({ kind: "message", conversationId: message.conversationId }, message);
+
+        // Synthesize a virtual activity update for each live message-scope subscriber (the real DB persist happens when ubsubscribing from messages and in getMessages)
+        const messageSubs = this.byScope.get(encodeScope({ kind: "message", conversationId: message.conversationId }));
+        if (!messageSubs) return;
+        for (const participantId of messageSubs) {
+            this.broadcastParticipantActivity({
+                conversationId: message.conversationId,
+                participantId,
+                lastReadMessageId: message.messageId,
+                lastReadMessageCreatedAt: message.createdAt,
+            });
+        }
+    }
+
+    broadcastParticipantActivity(activity: ParticipantActivity): void {
+        this.emit({ kind: "participantActivity" }, activity, [activity.participantId]);
     }
 
     async broadcastMessageById(messageId: string): Promise<void> {

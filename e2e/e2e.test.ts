@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
-import type { Conversation, Indicator, Invite, Message } from "../src/shared/shared-types.js";
+import type { Conversation, Indicator, Invite, Message, ParticipantActivity } from "../src/shared/shared-types.js";
 import { FakeTransport, tick } from "./helpers/wire.js";
 
 describe("e2e", () => {
@@ -309,6 +309,43 @@ describe("e2e", () => {
 
         const bobActivity = (await bob.getParticipantActivities()).find(a => a.conversationId === conversationId);
         expect(bobActivity?.lastReadMessageId).toBe(messageId);
+    });
+
+    test("onParticipantActivity fires synthetically for a subscribed message viewer when a new message arrives", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        const bobActivities: ParticipantActivity[] = [];
+        await bob.onParticipantActivity(activity => bobActivities.push(activity));
+        await bob.onMessage(conversationId, () => { });
+
+        const messageId = await alice.sendMessage(conversationId, "live");
+        await tick();
+
+        const synthetic = bobActivities.find(a => a.conversationId === conversationId && a.lastReadMessageId === messageId);
+        expect(synthetic).toBeTruthy();
+        expect(synthetic?.participantId).toBe("bob");
+    });
+
+    test("onParticipantActivity fires when getMessages persists a new read pointer", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Bob subscribes to activity but NOT to messages, so the only update path is the getMessages persist
+        const bobActivities: ParticipantActivity[] = [];
+        await bob.onParticipantActivity(activity => bobActivities.push(activity));
+
+        await alice.sendMessage(conversationId, "msg");
+        await bob.getMessages(conversationId, null, false, 10);
+        await tick();
+
+        expect(bobActivities.some(a => a.conversationId === conversationId)).toBe(true);
     });
 
     test("rate limits message sends", async () => {

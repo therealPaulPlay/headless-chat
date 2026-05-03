@@ -87,6 +87,8 @@ Event methods are async because subscribing and unsubscribing roundtrip to the s
 | async offConversation(handler: function) | - | Unsubscribe a handler. |
 | async onInvite(handler: function) | event: { conversationId: string, toParticipantId: string, data: Invite \| null } | Subscribe to per-invite updates. `data: null` means the invite was deleted. |
 | async offInvite(handler: function) | - | Unsubscribe a handler. |
+| async onParticipantActivity(handler: function) | activity: ParticipantActivity | Subscribe to live updates of the calling participant's read state. |
+| async offParticipantActivity(handler: function) | - | Unsubscribe a handler. |
 
 ## Server API
 
@@ -167,6 +169,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onReadConversation(handler: function) | conversationId: string | conversation: Conversation \| null | Should return the conversation by ID with `lastMessage` populated, or `null` if it does not exist. |
 | onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages ordered by `createdAt` ascending, each with its `reactions` array populated. The cursor message is never included. With `after: true` return strictly newer, with `after: false` strictly older. The library creates or updates the participant activity if a message newer than the one specified in `lastReadMessageCreatedAt` (cached at runtime) is fetched.
 | onReadMessage(handler: function) | messageId: string | message: Message \| null | Should return the message by ID with reactions populated, or null. |
+| onReadConversationLastMessage(handler: function) | conversationId: string | { messageId: string, createdAt: Date } \| null | Should return the ID and timestamp of the conversation's most recent message, or null if it has none. |
 | onReadReaction(handler: function) | reactionId: string | reaction: Reaction \| null | Should return the reaction by ID, or null. |
 | onReadInvites(handler: function) | participantId: string | invites: Invite[] | Should return all invites created by or created for the provided participant, ordered by `createdAt` descending. |
 | onReadInvite(handler: function) | conversationId: string, toParticipantId: string | invite: Invite \| null | Should return the invite for the pair, or null. |

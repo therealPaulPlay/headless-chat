@@ -205,4 +205,11 @@ export class Client {
     offInvite(handler: (event: InviteEvent) => void): Promise<void> {
         return this.unsubscribe(handler as AnyHandler);
     }
+
+    onParticipantActivity(handler: (activity: ParticipantActivity) => void): Promise<void> {
+        return this.subscribe(encodeScope({ kind: "participantActivity" }), handler as AnyHandler);
+    }
+    offParticipantActivity(handler: (activity: ParticipantActivity) => void): Promise<void> {
+        return this.unsubscribe(handler as AnyHandler);
+    }
 }

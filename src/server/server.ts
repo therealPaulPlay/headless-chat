@@ -89,6 +89,7 @@ export class Server {
     onReadConversationParticipantActivity(handler: Handler<[string, string], ParticipantActivity | null>) { this.handlers.readConversationParticipantActivity = handler; }
     onReadParticipantActivities(handler: Handler<[string], ParticipantActivity[]>) { this.handlers.readParticipantActivities = handler; }
     onReadMessage(handler: Handler<[string], Message | null>) { this.handlers.readMessage = handler; }
+    onReadConversationLastMessage(handler: Handler<[string], { messageId: string, createdAt: Date } | null>) { this.handlers.readConversationLastMessage = handler; }
     onReadConversation(handler: Handler<[string], Conversation | null>) { this.handlers.readConversation = handler; }
     onReadInvite(handler: Handler<[string, string], Invite | null>) { this.handlers.readInvite = handler; }
     onReadReaction(handler: Handler<[string], Reaction | null>) { this.handlers.readReaction = handler; }
