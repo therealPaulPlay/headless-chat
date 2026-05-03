@@ -1,4 +1,4 @@
-import { type ClientToServer, isValidScope } from "../shared/protocol.js";
+import { type ClientToServer, decodeScope } from "../shared/protocol.js";
 import { logError } from "../shared/log.js";
 import type { ServiceResult } from "./context.js";
 import type { Conversation, ConversationRecord, Message, MessageOptions, Reaction, Invite, ParticipantActivity, Alias, SystemEvent } from "../shared/shared-types.js";
@@ -65,6 +65,7 @@ export class Server {
             activityCache,
             indicators,
         };
+        this.subscriptions.setContext(this.ctx);
         this.scheduler = new CleanupScheduler(this.ctx, this.cleanup, this.rateLimits.sweepIntervalSeconds);
         this.scheduler.start();
     }
@@ -190,12 +191,15 @@ export class Server {
 
     // Subscriptions ------------------------------------------------------
 
-    private handleSubscribe(participantId: string, scope: string): void {
-        if (!isValidScope(scope)) return;
+    private handleSubscribe(participantId: string, encoded: string): void {
+        const scope = decodeScope(encoded);
+        if (scope === null) return;
         this.subscriptions.add(participantId, scope);
     }
 
-    private handleUnsubscribe(participantId: string, scope: string): void {
+    private handleUnsubscribe(participantId: string, encoded: string): void {
+        const scope = decodeScope(encoded);
+        if (scope === null) return;
         this.subscriptions.remove(participantId, scope);
     }
 

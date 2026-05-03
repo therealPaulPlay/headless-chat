@@ -38,13 +38,29 @@ type EventMessage = {
 export type ClientToServer = RequestMessage | SubscribeMessage | UnsubscribeMessage;
 export type ServerToClient = ResponseMessage | EventMessage;
 
-export const SCOPE = {
-    message: (conversationId: string) => `message:${conversationId}`,
-    indicators: (conversationId: string) => `indicators:${conversationId}`,
-    conversation: () => "conversation",
-    invite: () => "invite",
-};
+// Scope kinds
+// Per-conversation scopes carry a conversationId, global scopes do not
+export type Scope =
+    | { kind: "message", conversationId: string }
+    | { kind: "indicators", conversationId: string }
+    | { kind: "conversation" }
+    | { kind: "invite" };
 
-export function isValidScope(scope: string): boolean {
-    return scope === "conversation" || scope === "invite" || scope.startsWith("message:") || scope.startsWith("indicators:");
+// Wire encoding
+// Per-conversation scopes serialize as `${kind}:${conversationId}`, global scopes as just `${kind}`
+export function encodeScope(scope: Scope): string {
+    switch (scope.kind) {
+        case "message": return `message:${scope.conversationId}`;
+        case "indicators": return `indicators:${scope.conversationId}`;
+        case "conversation": return "conversation";
+        case "invite": return "invite";
+    }
+}
+
+export function decodeScope(scope: string): Scope | null {
+    if (scope === "conversation") return { kind: "conversation" };
+    if (scope === "invite") return { kind: "invite" };
+    if (scope.startsWith("message:")) return { kind: "message", conversationId: scope.slice("message:".length) };
+    if (scope.startsWith("indicators:")) return { kind: "indicators", conversationId: scope.slice("indicators:".length) };
+    return null;
 }

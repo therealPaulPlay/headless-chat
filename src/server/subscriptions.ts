@@ -1,12 +1,18 @@
-import { SCOPE } from "../shared/protocol.js";
+import { type Scope, encodeScope } from "../shared/protocol.js";
 import { type Handlers, type ServerDispatch, getHandler } from "./server-types.js";
 import type { Conversation, Invite, Message } from "../shared/shared-types.js";
 import type { IndicatorStore } from "./indicators-store.js";
+import type { ServerContext } from "./context.js";
+import { markConversationRead } from "./services/getters.js";
 import { logError } from "../shared/log.js";
 
 export class Subscriptions {
+    // Map keys are encoded scope strings since Map needs primitive keys, the public API speaks in Scope objects
     private byScope = new Map<string, Set<string>>();
-    private byParticipant = new Map<string, Set<string>>();
+    private byParticipant = new Map<string, Set<Scope>>();
+
+    // Injected by Server after construction since ctx references subscriptions back
+    private ctx!: ServerContext;
 
     constructor(
         private dispatch: ServerDispatch,
@@ -14,15 +20,19 @@ export class Subscriptions {
         private indicators: IndicatorStore,
     ) { }
 
+    setContext(ctx: ServerContext): void { this.ctx = ctx; }
+
     // Add a participant to a specific scope
-    add(participantId: string, scope: string): boolean {
+    add(participantId: string, scope: Scope): boolean {
+        const encoded = encodeScope(scope);
+
         // Check if already subscribed
-        const scopeSet = this.byScope.get(scope);
+        const scopeSet = this.byScope.get(encoded);
         if (scopeSet?.has(participantId)) return false;
 
-        // Enable lookup by scope, and create set if necessary)
+        // Enable lookup by scope, and create set if necessary
         if (scopeSet) scopeSet.add(participantId);
-        else this.byScope.set(scope, new Set([participantId]));
+        else this.byScope.set(encoded, new Set([participantId]));
 
         // Also enable lookup by participant ID
         const participantScopes = this.byParticipant.get(participantId);
@@ -33,19 +43,29 @@ export class Subscriptions {
     }
 
     // Remove a participant from a specific scope
-    remove(participantId: string, scope: string): void {
+    remove(participantId: string, scope: Scope): void {
+        const encoded = encodeScope(scope);
+
         // Delete from byScope
-        const scopeSet = this.byScope.get(scope);
+        const scopeSet = this.byScope.get(encoded);
         if (scopeSet) {
             scopeSet.delete(participantId);
-            if (scopeSet.size === 0) this.byScope.delete(scope);
+            if (scopeSet.size === 0) this.byScope.delete(encoded);
         }
 
-        // Delete from byParticipant
+        // Delete from byParticipant - the Set holds Scope objects, callers pass a fresh one so a linear lookup by encoded equality is needed
         const participantScopes = this.byParticipant.get(participantId);
         if (participantScopes) {
-            participantScopes.delete(scope);
+            for (const stored of participantScopes) {
+                if (encodeScope(stored) === encoded) { participantScopes.delete(stored); break; }
+            }
             if (participantScopes.size === 0) this.byParticipant.delete(participantId);
+        }
+
+        // Unsubscribing from a conversation's message scope marks the conversation's latest message as read
+        if (scope.kind === "message") {
+            markConversationRead(this.ctx, scope.conversationId, participantId)
+                .catch(error => logError("markConversationRead", error));
         }
     }
 
@@ -67,11 +87,12 @@ export class Subscriptions {
     }
 
     // Targets is an optional iterator of participant IDs, if ommited, it will be distributed to all participants with the scope
-    private emit(scope: string, data: unknown, targets?: Iterable<string>): void {
-        const subs = this.byScope.get(scope);
+    private emit(scope: Scope, data: unknown, targets?: Iterable<string>): void {
+        const encoded = encodeScope(scope);
+        const subs = this.byScope.get(encoded);
         if (!subs || subs.size === 0) return;
 
-        const event = { type: "event", scope, data };
+        const event = { type: "event", scope: encoded, data };
         if (targets) {
             for (const participantId of targets) {
                 if (subs.has(participantId)) this.safeDispatch(participantId, event);
@@ -82,7 +103,7 @@ export class Subscriptions {
     }
 
     broadcastMessage(message: Message): void {
-        this.emit(SCOPE.message(message.conversationId), message);
+        this.emit({ kind: "message", conversationId: message.conversationId }, message);
     }
 
     async broadcastMessageById(messageId: string): Promise<void> {
@@ -93,24 +114,24 @@ export class Subscriptions {
     }
 
     broadcastIndicators(conversationId: string): void {
-        const scope = SCOPE.indicators(conversationId);
-        if (!this.byScope.get(scope)?.size) return;
+        const scope: Scope = { kind: "indicators", conversationId };
+        if (!this.byScope.get(encodeScope(scope))?.size) return;
         this.emit(scope, this.indicators.list(conversationId));
     }
 
     broadcastConversation(conversation: Conversation): void {
-        this.emit(SCOPE.conversation(), { conversationId: conversation.conversationId, data: conversation }, conversation.participants);
+        this.emit({ kind: "conversation" }, { conversationId: conversation.conversationId, data: conversation }, conversation.participants);
     }
 
     broadcastConversationDeleted(conversationId: string, formerParticipants: string[]): void {
-        this.emit(SCOPE.conversation(), { conversationId, data: null }, formerParticipants);
+        this.emit({ kind: "conversation" }, { conversationId, data: null }, formerParticipants);
     }
 
     broadcastInvite(invite: Invite): void {
-        this.emit(SCOPE.invite(), { conversationId: invite.conversation.conversationId, toParticipantId: invite.toParticipantId, data: invite }, [invite.fromParticipantId, invite.toParticipantId]);
+        this.emit({ kind: "invite" }, { conversationId: invite.conversation.conversationId, toParticipantId: invite.toParticipantId, data: invite }, [invite.fromParticipantId, invite.toParticipantId]);
     }
 
     broadcastInviteDeleted(conversationId: string, fromParticipantId: string, toParticipantId: string): void {
-        this.emit(SCOPE.invite(), { conversationId, toParticipantId, data: null }, [fromParticipantId, toParticipantId]);
+        this.emit({ kind: "invite" }, { conversationId, toParticipantId, data: null }, [fromParticipantId, toParticipantId]);
     }
 }

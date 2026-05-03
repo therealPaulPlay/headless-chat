@@ -1,4 +1,4 @@
-import { type ServerToClient, SCOPE } from "../shared/protocol.js";
+import { type ServerToClient, encodeScope } from "../shared/protocol.js";
 import type { Conversation, Invite, Message, MessageOptions, Indicator, Alias, ParticipantActivity } from "../shared/shared-types.js";
 
 export type { Conversation, Message, MessageOptions, Indicator, Invite, ParticipantActivity, Alias } from "../shared/shared-types.js";
@@ -179,28 +179,28 @@ export class Client {
     // Event subscriptions ------------------------------------------------
 
     onMessage(conversationId: string, handler: (message: Message) => void): Promise<void> {
-        return this.subscribe(SCOPE.message(conversationId), handler as AnyHandler);
+        return this.subscribe(encodeScope({ kind: "message", conversationId }), handler as AnyHandler);
     }
     offMessage(handler: (message: Message) => void): Promise<void> {
         return this.unsubscribe(handler as AnyHandler);
     }
 
     onIndicators(conversationId: string, handler: (indicators: Indicator[]) => void): Promise<void> {
-        return this.subscribe(SCOPE.indicators(conversationId), handler as AnyHandler);
+        return this.subscribe(encodeScope({ kind: "indicators", conversationId }), handler as AnyHandler);
     }
     offIndicators(handler: (indicators: Indicator[]) => void): Promise<void> {
         return this.unsubscribe(handler as AnyHandler);
     }
 
     onConversation(handler: (event: ConversationEvent) => void): Promise<void> {
-        return this.subscribe(SCOPE.conversation(), handler as AnyHandler);
+        return this.subscribe(encodeScope({ kind: "conversation" }), handler as AnyHandler);
     }
     offConversation(handler: (event: ConversationEvent) => void): Promise<void> {
         return this.unsubscribe(handler as AnyHandler);
     }
 
     onInvite(handler: (event: InviteEvent) => void): Promise<void> {
-        return this.subscribe(SCOPE.invite(), handler as AnyHandler);
+        return this.subscribe(encodeScope({ kind: "invite" }), handler as AnyHandler);
     }
     offInvite(handler: (event: InviteEvent) => void): Promise<void> {
         return this.unsubscribe(handler as AnyHandler);

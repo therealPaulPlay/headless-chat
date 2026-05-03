@@ -31,8 +31,16 @@ export async function getMessages(
     return { result, hooks: [] };
 }
 
+// Mark the conversation's latest message as read for the participant
+// Used by the unsubscribe path (offMessage / cleanupParticipant) to capture progress made via the live message subscription
+export async function markConversationRead(ctx: ServerContext, conversationId: string, participantId: string): Promise<void> {
+    const conversation = await getHandler(ctx.handlers, "readConversation")(conversationId);
+    if (!conversation || !conversation.lastMessage) return;
+    await checkUpdateActivity(ctx, conversationId, participantId, [conversation.lastMessage]);
+}
+
 // Update the participant's last-read pointer if any returned message is newer than the cached pointer
-// Cache value 0 means no DB row yet, >0 means a row exists with that ts
+// Cache value 0 means no DB row yet, >0 means a row exists with that timestamp
 async function checkUpdateActivity(ctx: ServerContext, conversationId: string, participantId: string, messages: Message[]): Promise<void> {
     if (messages.length === 0) return;
 

@@ -267,6 +267,50 @@ describe("e2e", () => {
         expect((await alice.getParticipantActivities()).some(a => a.conversationId === conversationId)).toBe(false);
     });
 
+    test("offMessage marks the conversation's latest message as read", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Bob subscribes and receives a message live, with NO call to getMessages
+        const handler = (_message: Message) => { };
+        await bob.onMessage(conversationId, handler);
+        const messageId = await alice.sendMessage(conversationId, "live message");
+        await tick();
+
+        // Pre-condition: no activity row yet because bob never called getMessages
+        expect((await bob.getParticipantActivities()).some(a => a.conversationId === conversationId)).toBe(false);
+
+        // Unsubscribing should persist the latest seen message as read
+        await bob.offMessage(handler);
+        await tick();
+
+        const activities = await bob.getParticipantActivities();
+        const bobActivity = activities.find(a => a.conversationId === conversationId);
+        expect(bobActivity?.lastReadMessageId).toBe(messageId);
+    });
+
+    test("cleanupParticipant marks message-subscribed conversations as read", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        await bob.onMessage(conversationId, () => { });
+        const messageId = await alice.sendMessage(conversationId, "via subscription");
+        await tick();
+
+        // Simulate a transport drop - server-side cleanup should still flush the read marker
+        transport.server.cleanupParticipant("bob");
+        await tick();
+
+        const bobActivity = (await bob.getParticipantActivities()).find(a => a.conversationId === conversationId);
+        expect(bobActivity?.lastReadMessageId).toBe(messageId);
+    });
+
     test("rate limits message sends", async () => {
         const tight = new FakeTransport({ messageLimitPerSecond: 2 });
         try {
