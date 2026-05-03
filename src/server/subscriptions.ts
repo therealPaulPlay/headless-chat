@@ -6,6 +6,9 @@ import type { ServerContext } from "./context.js";
 import { checkUpdateActivity } from "./services/getters.js";
 import { logError } from "../shared/log.js";
 
+// Descriptor for a single broadcast event - resolved into wire-shaped { scope, data } per recipient by emit
+export type PreparedEvent = { scope: Scope, data: unknown, targets: string[] };
+
 export class Subscriptions {
     // Map keys are encoded scope strings since Map needs primitive keys, the public API speaks in Scope objects
     private byScope = new Map<string, Set<string>>();
@@ -90,68 +93,96 @@ export class Subscriptions {
         this.safeDispatch(participantId, { type: "response", requestId, ok, data, error });
     }
 
-    // Targets is an optional iterator of participant IDs, if ommited, it will be distributed to all participants with the scope
-    private emit(scope: Scope, data: unknown, targets?: Iterable<string>): void {
-        const encoded = encodeScope(scope);
-        const subs = this.byScope.get(encoded);
-        if (!subs || subs.size === 0) return;
-
-        const event = { type: "event", scope: encoded, data };
-        if (targets) {
-            for (const participantId of targets) {
-                if (subs.has(participantId)) this.safeDispatch(participantId, event);
+    // Group prepared events by recipient and dispatch one batch per participant
+    // Multiple lists let callers atomically deliver related events (e.g. message + activity) so clients never see a half-state
+    emit(...lists: PreparedEvent[][]): void {
+        const perParticipant = new Map<string, { scope: string, data: unknown }[]>();
+        for (const list of lists) {
+            for (const prepared of list) {
+                const encoded = encodeScope(prepared.scope);
+                const subs = this.byScope.get(encoded);
+                if (!subs || subs.size === 0) continue;
+                for (const target of prepared.targets) {
+                    if (!subs.has(target)) continue;
+                    let pending = perParticipant.get(target);
+                    if (!pending) { pending = []; perParticipant.set(target, pending); }
+                    pending.push({ scope: encoded, data: prepared.data });
+                }
             }
-        } else {
-            for (const participantId of subs) this.safeDispatch(participantId, event);
+        }
+        for (const [participantId, events] of perParticipant) {
+            this.safeDispatch(participantId, { type: "events", events });
         }
     }
 
-    broadcastMessage(message: Message): void {
-        this.emit({ kind: "message", conversationId: message.conversationId }, message);
+    // Prepare helpers ---------------------------------------
 
-        // Synthesize a virtual activity update for each live message-scope subscriber (the real DB persist happens when ubsubscribing from messages and in getMessages)
-        const messageSubs = this.byScope.get(encodeScope({ kind: "message", conversationId: message.conversationId }));
-        if (!messageSubs) return;
-        for (const participantId of messageSubs) {
-            this.broadcastParticipantActivity({
-                conversationId: message.conversationId,
-                participantId,
-                lastReadMessageId: message.messageId,
-                lastReadMessageCreatedAt: message.createdAt,
-            });
-        }
+    prepareMessage(message: Message): PreparedEvent[] {
+        const scope: Scope = { kind: "message", conversationId: message.conversationId };
+        const subs = this.byScope.get(encodeScope(scope));
+        const targets = subs ? [...subs] : [];
+        // Synthesize a virtual activity update for each live message-scope subscriber (the real DB persist happens when unsubscribing from messages and in getMessages)
+        const activityEvents = targets.flatMap(participantId => this.prepareParticipantActivity({
+            conversationId: message.conversationId,
+            participantId,
+            lastReadMessageId: message.messageId,
+            lastReadMessageCreatedAt: message.createdAt,
+        }));
+        return [{ scope, data: message, targets }, ...activityEvents];
     }
 
-    broadcastParticipantActivity(activity: ParticipantActivity): void {
-        this.emit({ kind: "participantActivity" }, activity, [activity.participantId]);
+    prepareIndicators(conversationId: string): PreparedEvent[] {
+        const scope: Scope = { kind: "indicators", conversationId };
+        const subs = this.byScope.get(encodeScope(scope));
+        if (!subs?.size) return [];
+        return [{ scope, data: this.indicators.list(conversationId), targets: [...subs] }];
     }
 
-    async broadcastMessageById(messageId: string): Promise<void> {
+    prepareConversation(conversation: Conversation): PreparedEvent[] {
+        return [{
+            scope: { kind: "conversation" },
+            data: { conversationId: conversation.conversationId, data: conversation },
+            targets: conversation.participants,
+        }];
+    }
+
+    prepareConversationDeleted(conversationId: string, formerParticipants: string[]): PreparedEvent[] {
+        return [{
+            scope: { kind: "conversation" },
+            data: { conversationId, data: null },
+            targets: formerParticipants,
+        }];
+    }
+
+    prepareInvite(invite: Invite): PreparedEvent[] {
+        return [{
+            scope: { kind: "invite" },
+            data: { conversationId: invite.conversation.conversationId, toParticipantId: invite.toParticipantId, data: invite },
+            targets: [invite.fromParticipantId, invite.toParticipantId],
+        }];
+    }
+
+    prepareInviteDeleted(conversationId: string, fromParticipantId: string, toParticipantId: string): PreparedEvent[] {
+        return [{
+            scope: { kind: "invite" },
+            data: { conversationId, toParticipantId, data: null },
+            targets: [fromParticipantId, toParticipantId],
+        }];
+    }
+
+    prepareParticipantActivity(activity: ParticipantActivity): PreparedEvent[] {
+        return [{
+            scope: { kind: "participantActivity" },
+            data: activity,
+            targets: [activity.participantId],
+        }];
+    }
+
+    // Used when only a messageId is on hand (reactions), reads the message then prepares + emits
+    async emitMessageById(messageId: string): Promise<void> {
         try {
             const message = await getHandler(this.handlers, "readMessage")(messageId);
-            if (message) this.broadcastMessage(message);
+            if (message) this.emit(this.prepareMessage(message));
         } catch (error) { logError("readMessage", error); }
-    }
-
-    broadcastIndicators(conversationId: string): void {
-        const scope: Scope = { kind: "indicators", conversationId };
-        if (!this.byScope.get(encodeScope(scope))?.size) return;
-        this.emit(scope, this.indicators.list(conversationId));
-    }
-
-    broadcastConversation(conversation: Conversation): void {
-        this.emit({ kind: "conversation" }, { conversationId: conversation.conversationId, data: conversation }, conversation.participants);
-    }
-
-    broadcastConversationDeleted(conversationId: string, formerParticipants: string[]): void {
-        this.emit({ kind: "conversation" }, { conversationId, data: null }, formerParticipants);
-    }
-
-    broadcastInvite(invite: Invite): void {
-        this.emit({ kind: "invite" }, { conversationId: invite.conversation.conversationId, toParticipantId: invite.toParticipantId, data: invite }, [invite.fromParticipantId, invite.toParticipantId]);
-    }
-
-    broadcastInviteDeleted(conversationId: string, fromParticipantId: string, toParticipantId: string): void {
-        this.emit({ kind: "invite" }, { conversationId, toParticipantId, data: null }, [fromParticipantId, toParticipantId]);
     }
 }

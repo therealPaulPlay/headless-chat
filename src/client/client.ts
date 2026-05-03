@@ -54,12 +54,14 @@ export class Client {
             return;
         }
 
-        // Server-pushed events that the client is subscribed to
-        if (message.type === "event") {
-            const handlers = this.scopeHandlers.get(message.scope);
-            if (!handlers) return;
-            for (const handler of handlers) {
-                try { handler(message.data); } catch { /* spec: client handler errors are suppressed */ }
+        // Server-pushed events the client is subscribed to, delivered in batches
+        if (message.type === "events") {
+            for (const event of message.events) {
+                const handlers = this.scopeHandlers.get(event.scope);
+                if (!handlers) continue;
+                for (const handler of handlers) {
+                    try { handler(event.data); } catch { }
+                }
             }
             return;
         }

@@ -45,7 +45,7 @@ export class CleanupScheduler {
     private runIndicators(): void {
         // Broadcast affected conversations so subscribers see the post-sweep indicator state
         const affected = this.ctx.indicators.sweep(Date.now() - this.cleanup.indicatorTtlSeconds * 1000);
-        for (const conversationId of affected) this.ctx.subscriptions.broadcastIndicators(conversationId);
+        for (const conversationId of affected) this.ctx.subscriptions.emit(this.ctx.subscriptions.prepareIndicators(conversationId));
     }
 
     private async runDaily(): Promise<void> {
@@ -70,8 +70,9 @@ export class CleanupScheduler {
             const handler = getHandler(this.ctx.handlers, "deleteInvitesBefore");
             try {
                 const { deletedInvites } = await handler(new Date(now - this.cleanup.inviteAfterDays * ONE_DAY_MS));
+                // Bundle all invite deletions so subscribers see them in one batch
+                this.ctx.subscriptions.emit(...deletedInvites.map(invite => this.ctx.subscriptions.prepareInviteDeleted(invite.conversationId, invite.fromParticipantId, invite.toParticipantId)));
                 for (const invite of deletedInvites) {
-                    this.ctx.subscriptions.broadcastInviteDeleted(invite.conversationId, invite.fromParticipantId, invite.toParticipantId);
                     fireHook(this.ctx.handlers, "afterInviteDeleted", invite.conversationId, invite.fromParticipantId, invite.toParticipantId);
                 }
             } catch (error) { logError("deleteInvitesBefore", error); }

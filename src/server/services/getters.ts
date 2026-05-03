@@ -68,5 +68,5 @@ export async function checkUpdateActivity(ctx: ServerContext, conversationId: st
     if (cachedReadTs === 0) await getHandler(ctx.handlers, "createConversationParticipantActivity")(updatedActivity);
     else await getHandler(ctx.handlers, "updateConversationParticipantActivity")(updatedActivity);
     ctx.activityCache.set(cacheKey, latestMessageTs);
-    ctx.subscriptions.broadcastParticipantActivity(updatedActivity);
+    ctx.subscriptions.emit(ctx.subscriptions.prepareParticipantActivity(updatedActivity));
 }

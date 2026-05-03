@@ -14,9 +14,10 @@ function normalizeOptions(options: MessageOptions | undefined): MessageOptions {
 // Persist a fresh message, fan out to message subscribers, and refresh the conversation summary
 async function persistAndFanoutMessage(ctx: ServerContext, message: Message): Promise<void> {
     await getHandler(ctx.handlers, "createMessage")(message);
-    ctx.subscriptions.broadcastMessage(message);
     const conversation = await getHandler(ctx.handlers, "readConversation")(message.conversationId);
-    if (conversation) ctx.subscriptions.broadcastConversation(conversation);
+    if (!conversation) return; // Conversation was deleted between the create and the broadcast, skip
+    // Bundle so subscribers receive the new message and the refreshed conversation atomically
+    ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(message), ctx.subscriptions.prepareConversation(conversation));
 }
 
 function buildMessage(participantId: string, conversationId: string, text: string, options: MessageOptions | undefined, systemEvent: SystemEvent | null): Message {
@@ -65,7 +66,7 @@ export async function editMessage(ctx: ServerContext, participantId: string, mes
         modifiedAt: now(),
     };
     await getHandler(ctx.handlers, "updateMessage")(updated);
-    ctx.subscriptions.broadcastMessage(updated);
+    ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(updated));
     return { result: undefined, hooks: [] };
 }
 
@@ -78,7 +79,7 @@ export async function deleteMessage(ctx: ServerContext, participantId: string, m
     // Keep the row so replies and pagination stay consistent
     const tombstoned: Message = { ...existing, deleted: true, modifiedAt: now() };
     await getHandler(ctx.handlers, "updateMessage")(tombstoned);
-    ctx.subscriptions.broadcastMessage(tombstoned);
+    ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(tombstoned));
     return { result: undefined, hooks: [() => fireHook(ctx.handlers, "afterMessageDeleted", tombstoned)] };
 }
 
@@ -96,7 +97,7 @@ export async function addReaction(ctx: ServerContext, participantId: string, mes
     };
     // Consumer's onCreateReaction enforces participation and dedup on (messageId, participantId)
     await getHandler(ctx.handlers, "createReaction")(reaction);
-    await ctx.subscriptions.broadcastMessageById(messageId);
+    await ctx.subscriptions.emitMessageById(messageId);
     return { result: undefined, hooks: [] };
 }
 
@@ -105,7 +106,7 @@ export async function removeReaction(ctx: ServerContext, participantId: string, 
     if (!reaction) throw new Error("Reaction not found");
     if (reaction.participantId !== participantId) throw new Error("Not authorized to remove this reaction");
     await getHandler(ctx.handlers, "deleteReaction")(reactionId);
-    await ctx.subscriptions.broadcastMessageById(reaction.messageId);
+    await ctx.subscriptions.emitMessageById(reaction.messageId);
     return { result: undefined, hooks: [] };
 }
 

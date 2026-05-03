@@ -29,14 +29,13 @@ type ResponseMessage = {
     error?: string,
 }
 
-type EventMessage = {
-    type: "event",
-    scope: string,
-    data: unknown,
+type EventsMessage = {
+    type: "events",
+    events: { scope: string, data: unknown }[],
 }
 
 export type ClientToServer = RequestMessage | SubscribeMessage | UnsubscribeMessage;
-export type ServerToClient = ResponseMessage | EventMessage;
+export type ServerToClient = ResponseMessage | EventsMessage;
 
 // Scope kinds
 // Per-conversation scopes carry a conversationId, global scopes do not

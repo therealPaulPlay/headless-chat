@@ -21,8 +21,9 @@ export async function deleteParticipant(ctx: ServerContext, participantId: strin
     const invites = await getHandler(ctx.handlers, "readInvites")(participantId);
     if (invites.length > 0) {
         await getHandler(ctx.handlers, "deleteInvites")(invites.map(invite => ({ conversationId: invite.conversation.conversationId, toParticipantId: invite.toParticipantId })));
+        // Bundle all invite deletions so the inviter sees them as one update
+        ctx.subscriptions.emit(...invites.map(invite => ctx.subscriptions.prepareInviteDeleted(invite.conversation.conversationId, invite.fromParticipantId, invite.toParticipantId)));
         for (const invite of invites) {
-            ctx.subscriptions.broadcastInviteDeleted(invite.conversation.conversationId, invite.fromParticipantId, invite.toParticipantId);
             hooks.push(() => fireHook(ctx.handlers, "afterInviteDeleted", invite.conversation.conversationId, invite.fromParticipantId, invite.toParticipantId));
         }
     }

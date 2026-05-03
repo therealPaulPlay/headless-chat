@@ -17,10 +17,11 @@ async function joinFlow(ctx: ServerContext, conversationId: string, participantI
 // Emits side-effects for an already-deleted conversation, broadcasts now and returns hooks to fire later
 // Use when the rows have already been removed
 export function emitConversationDeleted(ctx: ServerContext, conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[]): AfterHook[] {
-    ctx.subscriptions.broadcastConversationDeleted(conversationId, formerParticipants);
-    for (const invite of deletedInvites) {
-        ctx.subscriptions.broadcastInviteDeleted(conversationId, invite.fromParticipantId, invite.toParticipantId);
-    }
+    // Bundle the conversation deletion with all invite deletions so subscribers see them atomically
+    ctx.subscriptions.emit(
+        ctx.subscriptions.prepareConversationDeleted(conversationId, formerParticipants),
+        ...deletedInvites.map(invite => ctx.subscriptions.prepareInviteDeleted(conversationId, invite.fromParticipantId, invite.toParticipantId)),
+    );
     const hooks: AfterHook[] = [() => fireHook(ctx.handlers, "afterConversationDeleted", conversationId)];
     for (const invite of deletedInvites) {
         hooks.push(() => fireHook(ctx.handlers, "afterInviteDeleted", conversationId, invite.fromParticipantId, invite.toParticipantId));
@@ -39,7 +40,7 @@ export async function createConversation(ctx: ServerContext, participantId: stri
     // Consumer must atomically insert the conversation row and the creator's participant seat
     await getHandler(ctx.handlers, "createConversation")(record, participantId);
     const surfaced: Conversation = { ...record, participants: [participantId], lastMessage: null };
-    ctx.subscriptions.broadcastConversation(surfaced);
+    ctx.subscriptions.emit(ctx.subscriptions.prepareConversation(surfaced));
     return { result: conversationId, hooks: [() => fireHook(ctx.handlers, "afterConversationCreated", surfaced)] };
 }
 
@@ -71,7 +72,7 @@ export async function createInvite(ctx: ServerContext, fromParticipantId: string
     };
     // Handler dedupes on (conversationId, toParticipantId), throws if recipient is already a participant
     await getHandler(ctx.handlers, "createInvite")(invite);
-    ctx.subscriptions.broadcastInvite(invite);
+    ctx.subscriptions.emit(ctx.subscriptions.prepareInvite(invite));
     return { result: undefined, hooks: [() => fireHook(ctx.handlers, "afterInviteCreated", invite)] };
 }
 
@@ -85,7 +86,7 @@ export async function revokeInvite(ctx: ServerContext, participantId: string, co
 // Admin-friendly variant, no ownership check
 export async function revokeInviteByPair(ctx: ServerContext, conversationId: string, fromParticipantId: string, toParticipantId: string): Promise<ServiceResult<void>> {
     await getHandler(ctx.handlers, "deleteInvites")([{ conversationId, toParticipantId }]);
-    ctx.subscriptions.broadcastInviteDeleted(conversationId, fromParticipantId, toParticipantId);
+    ctx.subscriptions.emit(ctx.subscriptions.prepareInviteDeleted(conversationId, fromParticipantId, toParticipantId));
     return { result: undefined, hooks: [() => fireHook(ctx.handlers, "afterInviteDeleted", conversationId, fromParticipantId, toParticipantId)] };
 }
 
@@ -105,13 +106,15 @@ export async function acceptInvite(ctx: ServerContext, participantId: string, co
     if (matching.length > 0) {
         await getHandler(ctx.handlers, "deleteInvites")(matching.map(invite => ({ conversationId, toParticipantId: invite.toParticipantId })));
         for (const invite of matching) {
-            ctx.subscriptions.broadcastInviteDeleted(conversationId, invite.fromParticipantId, invite.toParticipantId);
             hooks.push(() => fireHook(ctx.handlers, "afterInviteDeleted", conversationId, invite.fromParticipantId, invite.toParticipantId));
         }
     }
 
+    // Bundle the conversation refresh with all invite deletions so the joiner's UI sees them atomically
     const updated = await getHandler(ctx.handlers, "readConversation")(conversationId);
-    if (updated) ctx.subscriptions.broadcastConversation(updated);
+    const inviteDeletions = matching.map(invite => ctx.subscriptions.prepareInviteDeleted(conversationId, invite.fromParticipantId, invite.toParticipantId));
+    if (updated) ctx.subscriptions.emit(ctx.subscriptions.prepareConversation(updated), ...inviteDeletions);
+    else ctx.subscriptions.emit(...inviteDeletions);
 
     return { result: undefined, hooks };
 }
@@ -127,7 +130,7 @@ export async function joinConversation(ctx: ServerContext, conversationId: strin
     }
 
     const updated = await getHandler(ctx.handlers, "readConversation")(conversationId);
-    if (updated) ctx.subscriptions.broadcastConversation(updated);
+    if (updated) ctx.subscriptions.emit(ctx.subscriptions.prepareConversation(updated));
 
     return { result: undefined, hooks };
 }
@@ -137,11 +140,9 @@ export async function declineInvite(ctx: ServerContext, participantId: string, c
     const matching = invites.filter(invite => invite.conversation.conversationId === conversationId && invite.toParticipantId === participantId);
     if (matching.length === 0) return { result: undefined, hooks: [] };
     await getHandler(ctx.handlers, "deleteInvites")(matching.map(invite => ({ conversationId, toParticipantId: invite.toParticipantId })));
-    const hooks: AfterHook[] = [];
-    for (const invite of matching) {
-        ctx.subscriptions.broadcastInviteDeleted(conversationId, invite.fromParticipantId, invite.toParticipantId);
-        hooks.push(() => fireHook(ctx.handlers, "afterInviteDeleted", conversationId, invite.fromParticipantId, invite.toParticipantId));
-    }
+    // Bundle all invite deletions so subscribers see them as one update
+    ctx.subscriptions.emit(...matching.map(invite => ctx.subscriptions.prepareInviteDeleted(conversationId, invite.fromParticipantId, invite.toParticipantId)));
+    const hooks: AfterHook[] = matching.map(invite => () => fireHook(ctx.handlers, "afterInviteDeleted", conversationId, invite.fromParticipantId, invite.toParticipantId));
     return { result: undefined, hooks };
 }
 
@@ -166,9 +167,10 @@ export async function leaveConversation(ctx: ServerContext, participantId: strin
     await getHandler(ctx.handlers, "deleteConversationParticipantActivities")([conversationId], [participantId]);
 
     // Tell the leaver their entry is gone, then refresh remaining participants' view of the conversation
-    ctx.subscriptions.broadcastConversationDeleted(conversationId, [participantId]);
+    // Recipient sets are disjoint - the leaver was already removed from participants, so no one gets both events
     const updated = await getHandler(ctx.handlers, "readConversation")(conversationId);
-    if (updated) ctx.subscriptions.broadcastConversation(updated);
+    const conversationLists = updated ? [ctx.subscriptions.prepareConversation(updated)] : [];
+    ctx.subscriptions.emit(ctx.subscriptions.prepareConversationDeleted(conversationId, [participantId]), ...conversationLists);
 
     return {
         result: undefined,
