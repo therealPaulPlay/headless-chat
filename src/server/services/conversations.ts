@@ -1,17 +1,18 @@
 import type { Conversation, ConversationRecord, Invite } from "../../shared/shared-types.js";
 import { getHandler } from "../server-types.js";
 import { type AfterHook, type ServerContext, type ServiceResult, fireHook, newId, now } from "../context.js";
+import type { PreparedEvent } from "../subscriptions.js";
 import { effectiveMaxParticipants } from "../validation.js";
 import { addMessage } from "./messages.js";
 import { logError } from "../../shared/log.js";
 
-// Adds the participant atomically, posts the join system message, returns hooks to fire after RPC response
-async function joinFlow(ctx: ServerContext, conversationId: string, participantId: string, conversation: Conversation): Promise<AfterHook[]> {
-    const max = effectiveMaxParticipants(conversation.maxSize, ctx.rateLimits.conversationParticipantLimit);
-    await getHandler(ctx.handlers, "addConversationParticipant")(conversationId, participantId, max);
-    // System messages are authored by the reserved "server" participant, the joining participant id is carried in systemEvent
-    const sysMsg = await addMessage(ctx, conversationId, "server", "", { referenceMessageId: null, isForwarded: false }, { type: "participantJoined", participantId });
-    return [() => fireHook(ctx.handlers, "afterParticipantJoined", conversationId, participantId), ...sysMsg.hooks];
+// Read-through cache lookup, on miss falls back to the readConversation handler and warms the cache
+export async function readConversationCached(ctx: ServerContext, conversationId: string): Promise<Conversation | null> {
+    const cached = ctx.conversationCache.get(conversationId);
+    if (cached) return cached;
+    const fresh = await getHandler(ctx.handlers, "readConversation")(conversationId);
+    if (fresh) ctx.conversationCache.set(conversationId, fresh);
+    return fresh;
 }
 
 // Emits side-effects for an already-deleted conversation, broadcasts now and returns hooks to fire later
@@ -40,6 +41,7 @@ export async function createConversation(ctx: ServerContext, participantId: stri
     // Consumer must atomically insert the conversation row and the creator's participant seat
     await getHandler(ctx.handlers, "createConversation")(record, participantId);
     const surfaced: Conversation = { ...record, participants: [participantId], lastMessage: null };
+    ctx.conversationCache.set(conversationId, surfaced);
     ctx.subscriptions.emit(ctx.subscriptions.prepareConversation(surfaced));
     return { result: conversationId, hooks: [() => fireHook(ctx.handlers, "afterConversationCreated", surfaced)] };
 }
@@ -48,7 +50,7 @@ export async function createInvite(ctx: ServerContext, fromParticipantId: string
     if (fromParticipantId === toParticipantId) throw new Error("Cannot invite yourself");
     ctx.rateLimiter.trackInvite(fromParticipantId);
 
-    const conversation = await getHandler(ctx.handlers, "readConversation")(conversationId);
+    const conversation = await readConversationCached(ctx, conversationId);
     if (!conversation) throw new Error("Conversation not found");
     if (!conversation.participants.includes(fromParticipantId)) throw new Error("Not a participant of this conversation");
 
@@ -77,83 +79,99 @@ export async function createInvite(ctx: ServerContext, fromParticipantId: string
 }
 
 export async function revokeInvite(ctx: ServerContext, participantId: string, conversationId: string, toParticipantId: string): Promise<ServiceResult<void>> {
-    const invite = await getHandler(ctx.handlers, "readInvite")(conversationId, toParticipantId);
+    // Check first - we shouldn't inform the inviter about a deletion that never happened
+    const invite = await getHandler(ctx.handlers, "readInvite")(conversationId, participantId, toParticipantId);
     if (!invite) throw new Error("Invite not found");
-    if (invite.fromParticipantId !== participantId) throw new Error("Not authorized to revoke this invite");
-    return revokeInviteByPair(ctx, conversationId, invite.fromParticipantId, toParticipantId);
+    return revokeInviteByPair(ctx, conversationId, participantId, toParticipantId);
 }
 
-// Admin-friendly variant, no ownership check
+// Admin-friendly variant
 export async function revokeInviteByPair(ctx: ServerContext, conversationId: string, fromParticipantId: string, toParticipantId: string): Promise<ServiceResult<void>> {
-    await getHandler(ctx.handlers, "deleteInvites")([{ conversationId, toParticipantId }]);
+    await getHandler(ctx.handlers, "deleteInvites")([{ conversationId, fromParticipantId, toParticipantId }]);
     ctx.subscriptions.emit(ctx.subscriptions.prepareInviteDeleted(conversationId, fromParticipantId, toParticipantId));
     return { result: undefined, hooks: [() => fireHook(ctx.handlers, "afterInviteDeleted", conversationId, fromParticipantId, toParticipantId)] };
 }
 
+// Adds the participant atomically, posts the join system message, returns hooks and prepared events for the caller to bundle and emit
+async function joinFlow(ctx: ServerContext, conversationId: string, participantId: string, conversation: Conversation): Promise<{ hooks: AfterHook[], events: PreparedEvent[][] }> {
+    const max = effectiveMaxParticipants(conversation.maxSize, ctx.rateLimits.conversationParticipantLimit);
+    await getHandler(ctx.handlers, "addConversationParticipant")(conversationId, participantId, max);
+    // The participants list changed, force the next read-through to re-fetch
+    ctx.conversationCache.invalidate(conversationId);
+    // System messages are authored by the reserved "server" participant, the joining participant id is carried in systemEvent
+    const sysMsg = await addMessage(ctx, conversationId, "server", "", { referenceMessageId: null, isForwarded: false }, { type: "participantJoined", participantId });
+    return {
+        hooks: [() => fireHook(ctx.handlers, "afterParticipantJoined", conversationId, participantId), ...sysMsg.hooks],
+        events: sysMsg.events,
+    };
+}
+
 export async function acceptInvite(ctx: ServerContext, participantId: string, conversationId: string): Promise<ServiceResult<void>> {
-    const conversation = await getHandler(ctx.handlers, "readConversation")(conversationId);
+    const conversation = await readConversationCached(ctx, conversationId);
     if (!conversation) throw new Error("Conversation not found");
 
-    // Get matching invites
-    const invites = await getHandler(ctx.handlers, "readInvites")(participantId);
-    const matching = invites.filter(invite => invite.conversation.conversationId === conversationId && invite.toParticipantId === participantId);
+    // Fetch only the invites for this participant in this conversation, possibly multiple if several senders invited them
+    const matching = await getHandler(ctx.handlers, "readInvitesForRecipient")(conversationId, participantId);
 
     const hooks: AfterHook[] = [];
+    const eventLists: PreparedEvent[][] = [];
     if (!conversation.participants.includes(participantId)) {
-        hooks.push(...await joinFlow(ctx, conversationId, participantId, conversation));
+        const joinResult = await joinFlow(ctx, conversationId, participantId, conversation);
+        hooks.push(...joinResult.hooks);
+        eventLists.push(...joinResult.events);
     }
 
     if (matching.length > 0) {
-        await getHandler(ctx.handlers, "deleteInvites")(matching.map(invite => ({ conversationId, toParticipantId: invite.toParticipantId })));
+        await getHandler(ctx.handlers, "deleteInvites")(matching.map(invite => ({ conversationId, fromParticipantId: invite.fromParticipantId, toParticipantId: participantId })));
         for (const invite of matching) {
-            hooks.push(() => fireHook(ctx.handlers, "afterInviteDeleted", conversationId, invite.fromParticipantId, invite.toParticipantId));
+            hooks.push(() => fireHook(ctx.handlers, "afterInviteDeleted", conversationId, invite.fromParticipantId, participantId));
+            eventLists.push(ctx.subscriptions.prepareInviteDeleted(conversationId, invite.fromParticipantId, participantId));
         }
     }
 
-    // Bundle the conversation refresh with all invite deletions so the joiner's UI sees them atomically
-    const updated = await getHandler(ctx.handlers, "readConversation")(conversationId);
-    const inviteDeletions = matching.map(invite => ctx.subscriptions.prepareInviteDeleted(conversationId, invite.fromParticipantId, invite.toParticipantId));
-    if (updated) ctx.subscriptions.emit(ctx.subscriptions.prepareConversation(updated), ...inviteDeletions);
-    else ctx.subscriptions.emit(...inviteDeletions);
+    ctx.subscriptions.emit(...eventLists);
 
     return { result: undefined, hooks };
 }
 
 // Admin-only direct add, no invite required
 export async function joinConversation(ctx: ServerContext, conversationId: string, participantId: string): Promise<ServiceResult<void>> {
-    const conversation = await getHandler(ctx.handlers, "readConversation")(conversationId);
+    const conversation = await readConversationCached(ctx, conversationId);
     if (!conversation) throw new Error("Conversation not found");
 
     const hooks: AfterHook[] = [];
+    const eventLists: PreparedEvent[][] = [];
     if (!conversation.participants.includes(participantId)) {
-        hooks.push(...await joinFlow(ctx, conversationId, participantId, conversation));
+        const joinResult = await joinFlow(ctx, conversationId, participantId, conversation);
+        hooks.push(...joinResult.hooks);
+        eventLists.push(...joinResult.events);
     }
 
-    const updated = await getHandler(ctx.handlers, "readConversation")(conversationId);
-    if (updated) ctx.subscriptions.emit(ctx.subscriptions.prepareConversation(updated));
+    ctx.subscriptions.emit(...eventLists);
 
     return { result: undefined, hooks };
 }
 
 export async function declineInvite(ctx: ServerContext, participantId: string, conversationId: string): Promise<ServiceResult<void>> {
-    const invites = await getHandler(ctx.handlers, "readInvites")(participantId);
-    const matching = invites.filter(invite => invite.conversation.conversationId === conversationId && invite.toParticipantId === participantId);
+    const matching = await getHandler(ctx.handlers, "readInvitesForRecipient")(conversationId, participantId);
     if (matching.length === 0) return { result: undefined, hooks: [] };
-    await getHandler(ctx.handlers, "deleteInvites")(matching.map(invite => ({ conversationId, toParticipantId: invite.toParticipantId })));
+    await getHandler(ctx.handlers, "deleteInvites")(matching.map(invite => ({ conversationId, fromParticipantId: invite.fromParticipantId, toParticipantId: participantId })));
     // Bundle all invite deletions so subscribers see them as one update
-    ctx.subscriptions.emit(...matching.map(invite => ctx.subscriptions.prepareInviteDeleted(conversationId, invite.fromParticipantId, invite.toParticipantId)));
-    const hooks: AfterHook[] = matching.map(invite => () => fireHook(ctx.handlers, "afterInviteDeleted", conversationId, invite.fromParticipantId, invite.toParticipantId));
+    ctx.subscriptions.emit(...matching.map(invite => ctx.subscriptions.prepareInviteDeleted(conversationId, invite.fromParticipantId, participantId)));
+    const hooks: AfterHook[] = matching.map(invite => () => fireHook(ctx.handlers, "afterInviteDeleted", conversationId, invite.fromParticipantId, participantId));
     return { result: undefined, hooks };
 }
 
 export async function leaveConversation(ctx: ServerContext, participantId: string, conversationId: string): Promise<ServiceResult<void>> {
-    const conversation = await getHandler(ctx.handlers, "readConversation")(conversationId);
+    const conversation = await readConversationCached(ctx, conversationId);
     if (!conversation) throw new Error("Conversation not found");
     if (!conversation.participants.includes(participantId)) throw new Error("Not a participant of this conversation");
 
     if (conversation.participants.length === 1) {
         // Delete conversation if now empty
         const { deletedInvites } = await getHandler(ctx.handlers, "deleteConversationWithMessagesReactionsInvitesAndActivities")(conversationId);
+        for (const pid of conversation.participants) ctx.activityCache.invalidate(`${conversationId}|${pid}`);
+        ctx.conversationCache.invalidate(conversationId);
         const deleteHooks = emitConversationDeleted(ctx, conversationId, conversation.participants, deletedInvites);
         return {
             result: undefined,
@@ -161,16 +179,16 @@ export async function leaveConversation(ctx: ServerContext, participantId: strin
         };
     }
 
+    // Remove first so the system message and the conversation refresh both reflect the post-leave state
+    await getHandler(ctx.handlers, "removeConversationParticipantAndDeleteParticipantActivity")(conversationId, participantId);
+    ctx.activityCache.invalidate(`${conversationId}|${participantId}`);
+    ctx.conversationCache.invalidate(conversationId);
     // System messages are authored by the reserved "server" participant, the leaving participant id is carried in systemEvent
     const sysMsg = await addMessage(ctx, conversationId, "server", "", { referenceMessageId: null, isForwarded: false }, { type: "participantLeft", participantId });
-    await getHandler(ctx.handlers, "removeConversationParticipant")(conversationId, participantId);
-    await getHandler(ctx.handlers, "deleteConversationParticipantActivities")([conversationId], [participantId]);
 
-    // Tell the leaver their entry is gone, then refresh remaining participants' view of the conversation
-    // Recipient sets are disjoint - the leaver was already removed from participants, so no one gets both events
-    const updated = await getHandler(ctx.handlers, "readConversation")(conversationId);
-    const conversationLists = updated ? [ctx.subscriptions.prepareConversation(updated)] : [];
-    ctx.subscriptions.emit(ctx.subscriptions.prepareConversationDeleted(conversationId, [participantId]), ...conversationLists);
+    // sysMsg.events already carries the refreshed Conversation snapshot (targeted at remaining participants)
+    // Recipient sets are disjoint - the leaver is no longer in participants, so the leaver only gets the deleted event
+    ctx.subscriptions.emit(ctx.subscriptions.prepareConversationDeleted(conversationId, [participantId]), ...sysMsg.events);
 
     return {
         result: undefined,

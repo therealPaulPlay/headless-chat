@@ -9,7 +9,6 @@ export class CleanupScheduler {
     private indicatorTimer: ReturnType<typeof setInterval> | null = null;
     private dailyTimer: ReturnType<typeof setInterval> | null = null;
     private sweepTimer: ReturnType<typeof setInterval> | null = null;
-    private activityCacheTimer: ReturnType<typeof setInterval> | null = null;
 
     constructor(
         private ctx: ServerContext,
@@ -26,20 +25,15 @@ export class CleanupScheduler {
 
         this.sweepTimer = setInterval(() => this.ctx.rateLimiter.sweep(), this.sweepIntervalSeconds * 1000);
         this.sweepTimer.unref?.();
-
-        this.activityCacheTimer = setInterval(() => this.ctx.activityCache.clear(), this.cleanup.activityCacheLifetimeMinutes * 60 * 1000);
-        this.activityCacheTimer.unref?.();
     }
 
     stop(): void {
         if (this.indicatorTimer) clearInterval(this.indicatorTimer);
         if (this.dailyTimer) clearInterval(this.dailyTimer);
         if (this.sweepTimer) clearInterval(this.sweepTimer);
-        if (this.activityCacheTimer) clearInterval(this.activityCacheTimer);
         this.indicatorTimer = null;
         this.dailyTimer = null;
         this.sweepTimer = null;
-        this.activityCacheTimer = null;
     }
 
     private runIndicators(): void {
@@ -60,7 +54,9 @@ export class CleanupScheduler {
             try {
                 const { deletedConversations } = await handler(new Date(now - this.cleanup.conversationAfterInactiveDays * ONE_DAY_MS));
                 for (const c of deletedConversations) {
-                    // Handler already deleted the rows, just emit the side-effects
+                    // Handler already deleted the rows, just emit the side-effects and invalidate the conversation + activity caches
+                    for (const pid of c.formerParticipants) this.ctx.activityCache.invalidate(`${c.conversationId}|${pid}`);
+                    this.ctx.conversationCache.invalidate(c.conversationId);
                     const hooks = emitConversationDeleted(this.ctx, c.conversationId, c.formerParticipants, c.deletedInvites);
                     for (const hook of hooks) await hook();
                 }

@@ -18,6 +18,7 @@ import { Subscriptions } from "./subscriptions.js";
 import { RateLimiter } from "./rate-limits.js";
 import { CleanupScheduler } from "./cleanup.js";
 import { IndicatorStore } from "./indicators-store.js";
+import { Cache } from "./cache.js";
 import type { ServerContext } from "./context.js";
 
 import * as conversationsService from "./services/conversations.js";
@@ -50,10 +51,8 @@ export class Server {
             messageAfterDays: cleanup.messageAfterDays ?? null,
             conversationAfterInactiveDays: cleanup.conversationAfterInactiveDays ?? null,
             inviteAfterDays: cleanup.inviteAfterDays ?? null,
-            activityCacheLifetimeMinutes: cleanup.activityCacheLifetimeMinutes ?? 10,
         };
 
-        const activityCache = new Map<string, number>();
         const indicators = new IndicatorStore();
         this.subscriptions = new Subscriptions(this.dispatch, this.handlers, indicators);
         this.rateLimiter = new RateLimiter(this.rateLimits);
@@ -62,7 +61,8 @@ export class Server {
             subscriptions: this.subscriptions,
             rateLimiter: this.rateLimiter,
             rateLimits: this.rateLimits,
-            activityCache,
+            activityCache: new Cache<number>(),
+            conversationCache: new Cache<Conversation>(),
             indicators,
         };
         this.subscriptions.setContext(this.ctx);
@@ -84,25 +84,25 @@ export class Server {
 
     onReadConversations(handler: Handler<[string], Conversation[]>) { this.handlers.readConversations = handler; }
     onReadMessages(handler: Handler<[string, string | null, boolean, number], { messages: Message[], remainingInDirection: number }>) { this.handlers.readMessages = handler; }
-    onReadInvites(handler: Handler<[string], Invite[]>) { this.handlers.readInvites = handler; }
+    onReadInvitesInvolvingParticipant(handler: Handler<[string], Invite[]>) { this.handlers.readInvitesInvolvingParticipant = handler; }
+    onReadInvitesForRecipient(handler: Handler<[string, string], Invite[]>) { this.handlers.readInvitesForRecipient = handler; }
     onReadAliases(handler: Handler<[string[]], Alias[]>) { this.handlers.readAliases = handler; }
     onReadConversationParticipantActivity(handler: Handler<[string, string], ParticipantActivity | null>) { this.handlers.readConversationParticipantActivity = handler; }
     onReadParticipantActivities(handler: Handler<[string], ParticipantActivity[]>) { this.handlers.readParticipantActivities = handler; }
     onReadMessage(handler: Handler<[string], Message | null>) { this.handlers.readMessage = handler; }
     onReadConversationLastMessage(handler: Handler<[string], { messageId: string, createdAt: Date } | null>) { this.handlers.readConversationLastMessage = handler; }
     onReadConversation(handler: Handler<[string], Conversation | null>) { this.handlers.readConversation = handler; }
-    onReadInvite(handler: Handler<[string, string], Invite | null>) { this.handlers.readInvite = handler; }
+    onReadInvite(handler: Handler<[string, string, string], Invite | null>) { this.handlers.readInvite = handler; }
     onReadReaction(handler: Handler<[string], Reaction | null>) { this.handlers.readReaction = handler; }
 
     onAddConversationParticipant(handler: Handler<[string, string, number], void>) { this.handlers.addConversationParticipant = handler; }
-    onRemoveConversationParticipant(handler: Handler<[string, string], void>) { this.handlers.removeConversationParticipant = handler; }
+    onRemoveConversationParticipantAndDeleteParticipantActivity(handler: Handler<[string, string], void>) { this.handlers.removeConversationParticipantAndDeleteParticipantActivity = handler; }
     onUpdateMessage(handler: Handler<[Message], void>) { this.handlers.updateMessage = handler; }
     onUpdateConversationParticipantActivity(handler: Handler<[ParticipantActivity], void>) { this.handlers.updateConversationParticipantActivity = handler; }
 
     onDeleteReaction(handler: Handler<[string], void>) { this.handlers.deleteReaction = handler; }
     onDeleteConversationWithMessagesReactionsInvitesAndActivities(handler: Handler<[string], { deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }>) { this.handlers.deleteConversationWithMessagesReactionsInvitesAndActivities = handler; }
-    onDeleteInvites(handler: Handler<[{ conversationId: string, toParticipantId: string }[]], void>) { this.handlers.deleteInvites = handler; }
-    onDeleteConversationParticipantActivities(handler: Handler<[string[], string[]], void>) { this.handlers.deleteConversationParticipantActivities = handler; }
+    onDeleteInvites(handler: Handler<[{ conversationId: string, fromParticipantId: string, toParticipantId: string }[]], void>) { this.handlers.deleteInvites = handler; }
     onDeleteMessagesBefore(handler: Handler<[Date], void>) { this.handlers.deleteMessagesBefore = handler; }
     onDeleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore(handler: Handler<[Date], { deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] }>) { this.handlers.deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore = handler; }
     onDeleteInvitesBefore(handler: Handler<[Date], { deletedInvites: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] }>) { this.handlers.deleteInvitesBefore = handler; }
@@ -246,7 +246,10 @@ export class Server {
     }
 
     sendMessage(conversationId: string, participantId: string, message: string, options?: MessageOptions, systemEvent?: SystemEvent): Promise<string> {
-        return this.runAdmin(messagesService.addMessage(this.ctx, conversationId, participantId, message, options, systemEvent));
+        return this.runAdmin(messagesService.addMessage(this.ctx, conversationId, participantId, message, options, systemEvent).then(({ events, ...rest }) => {
+            this.subscriptions.emit(...events);
+            return rest;
+        }));
     }
 
     // Hook registration --------------------------------------------

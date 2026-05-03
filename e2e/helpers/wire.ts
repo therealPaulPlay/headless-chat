@@ -1,6 +1,8 @@
 import { Server, type RateLimitOptions, type CleanupOptions } from "../../src/server/server.js";
 import { Client } from "../../src/client/client.js";
 import { InMemoryStore } from "./store.js";
+import type { Cache } from "../../src/server/cache.js";
+import type { Conversation } from "../../src/shared/shared-types.js";
 
 // Direct in-process wire, client.dispatch -> server.receive, server.dispatch -> client.receive
 export class FakeTransport {
@@ -16,6 +18,10 @@ export class FakeTransport {
         }, rateLimits, cleanup);
         this.store.register(this.server);
     }
+
+    // Test-only access into the lib's caches for assertions
+    get conversationCache(): Cache<Conversation> { return (this.server as unknown as { ctx: { conversationCache: Cache<Conversation> } }).ctx.conversationCache; }
+    get activityCache(): Cache<number> { return (this.server as unknown as { ctx: { activityCache: Cache<number> } }).ctx.activityCache; }
 
     addClient(participantId: string): Client {
         this.store.users.add(participantId);

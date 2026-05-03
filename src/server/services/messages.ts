@@ -1,6 +1,7 @@
 import type { Message, MessageOptions, Reaction, SystemEvent } from "../../shared/shared-types.js";
 import { getHandler } from "../server-types.js";
 import { type ServerContext, type ServiceResult, fireHook, newId, now } from "../context.js";
+import type { PreparedEvent } from "../subscriptions.js";
 import { applyProfanityChecks, isValidEmoji } from "../validation.js";
 import { removeIndicator } from "./indicators.js";
 
@@ -11,13 +12,24 @@ function normalizeOptions(options: MessageOptions | undefined): MessageOptions {
     };
 }
 
-// Persist a fresh message, fan out to message subscribers, and refresh the conversation summary
-async function persistAndFanoutMessage(ctx: ServerContext, message: Message): Promise<void> {
+// Persist a fresh message and prepare its broadcast events (message + refreshed conversation summary)
+async function persistAndPrepareMessage(ctx: ServerContext, message: Message): Promise<PreparedEvent[][]> {
     await getHandler(ctx.handlers, "createMessage")(message);
-    const conversation = await getHandler(ctx.handlers, "readConversation")(message.conversationId);
-    if (!conversation) return; // Conversation was deleted between the create and the broadcast, skip
-    // Bundle so subscribers receive the new message and the refreshed conversation atomically
-    ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(message), ctx.subscriptions.prepareConversation(conversation));
+
+    // Read-through cache, on miss fall back to a full DB read
+    let conversation = ctx.conversationCache.get(message.conversationId);
+    if (!conversation) {
+        const fresh = await getHandler(ctx.handlers, "readConversation")(message.conversationId);
+        if (!fresh) return []; // Conversation was deleted between the create and the broadcast, skip
+        conversation = fresh;
+    }
+
+    // Patch the in-flight snapshot rather than re-reading - the only fields that change are lastMessage and lastActivityAt
+    conversation.lastMessage = message;
+    conversation.lastActivityAt = message.createdAt;
+    ctx.conversationCache.set(message.conversationId, conversation);
+
+    return [ctx.subscriptions.prepareMessage(message), ctx.subscriptions.prepareConversation(conversation)];
 }
 
 function buildMessage(participantId: string, conversationId: string, text: string, options: MessageOptions | undefined, systemEvent: SystemEvent | null): Message {
@@ -44,7 +56,8 @@ export async function sendMessage(ctx: ServerContext, participantId: string, con
     await removeIndicator(ctx, participantId, conversationId);
 
     const message = buildMessage(participantId, conversationId, finalText, options, null);
-    await persistAndFanoutMessage(ctx, message);
+    const events = await persistAndPrepareMessage(ctx, message);
+    ctx.subscriptions.emit(...events);
     return { result: message.messageId, hooks: [() => fireHook(ctx.handlers, "afterMessageCreated", message)] };
 }
 
@@ -66,6 +79,12 @@ export async function editMessage(ctx: ServerContext, participantId: string, mes
         modifiedAt: now(),
     };
     await getHandler(ctx.handlers, "updateMessage")(updated);
+    // If the edited message is the conversation's lastMessage, the cached snapshot is stale - patch it
+    const cached = ctx.conversationCache.get(updated.conversationId);
+    if (cached?.lastMessage?.messageId === updated.messageId) {
+        cached.lastMessage = updated;
+        ctx.conversationCache.set(updated.conversationId, cached);
+    }
     ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(updated));
     return { result: undefined, hooks: [] };
 }
@@ -79,6 +98,12 @@ export async function deleteMessage(ctx: ServerContext, participantId: string, m
     // Keep the row so replies and pagination stay consistent
     const tombstoned: Message = { ...existing, deleted: true, modifiedAt: now() };
     await getHandler(ctx.handlers, "updateMessage")(tombstoned);
+    // If the tombstoned message is the conversation's lastMessage, the cached snapshot is stale - patch it
+    const cached = ctx.conversationCache.get(tombstoned.conversationId);
+    if (cached?.lastMessage?.messageId === tombstoned.messageId) {
+        cached.lastMessage = tombstoned;
+        ctx.conversationCache.set(tombstoned.conversationId, cached);
+    }
     ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(tombstoned));
     return { result: undefined, hooks: [() => fireHook(ctx.handlers, "afterMessageDeleted", tombstoned)] };
 }
@@ -95,8 +120,15 @@ export async function addReaction(ctx: ServerContext, participantId: string, mes
         content,
         createdAt: now(),
     };
-    // Consumer's onCreateReaction enforces participation and dedup on (messageId, participantId)
+    // Consumer's onCreateReaction enforces participation and one-reaction-per-(messageId, participantId), the new reaction replaces any prior one
     await getHandler(ctx.handlers, "createReaction")(reaction);
+    // Patch the cached snapshot if the reaction landed on the conversation's lastMessage
+    const cached = ctx.conversationCache.get(existing.conversationId);
+    if (cached?.lastMessage?.messageId === messageId) {
+        cached.lastMessage.reactions = cached.lastMessage.reactions.filter(r => r.participantId !== participantId);
+        cached.lastMessage.reactions.push(reaction);
+        ctx.conversationCache.set(existing.conversationId, cached);
+    }
     await ctx.subscriptions.emitMessageById(messageId);
     return { result: undefined, hooks: [] };
 }
@@ -106,13 +138,20 @@ export async function removeReaction(ctx: ServerContext, participantId: string, 
     if (!reaction) throw new Error("Reaction not found");
     if (reaction.participantId !== participantId) throw new Error("Not authorized to remove this reaction");
     await getHandler(ctx.handlers, "deleteReaction")(reactionId);
+    // Patch the cached snapshot if the reaction's message is the conversation's lastMessage
+    const conversationId = ctx.conversationCache.findKey(c => c.lastMessage?.messageId === reaction.messageId);
+    if (conversationId) {
+        const cached = ctx.conversationCache.get(conversationId)!;
+        cached.lastMessage!.reactions = cached.lastMessage!.reactions.filter(r => r.reactionId !== reactionId);
+        ctx.conversationCache.set(conversationId, cached);
+    }
     await ctx.subscriptions.emitMessageById(reaction.messageId);
     return { result: undefined, hooks: [] };
 }
 
-export async function addMessage(ctx: ServerContext, conversationId: string, participantId: string, text: string, options?: MessageOptions, systemEvent?: SystemEvent): Promise<ServiceResult<string>> {
-    // Server-side path, bypasses rate limit + profanity check
+// Server-side path, bypasses rate limit + profanity check, returns events for the caller to bundle or emit
+export async function addMessage(ctx: ServerContext, conversationId: string, participantId: string, text: string, options?: MessageOptions, systemEvent?: SystemEvent): Promise<ServiceResult<string> & { events: PreparedEvent[][] }> {
     const message = buildMessage(participantId, conversationId, text, options, systemEvent ?? null);
-    await persistAndFanoutMessage(ctx, message);
-    return { result: message.messageId, hooks: [() => fireHook(ctx.handlers, "afterMessageCreated", message)] };
+    const events = await persistAndPrepareMessage(ctx, message);
+    return { result: message.messageId, hooks: [() => fireHook(ctx.handlers, "afterMessageCreated", message)], events };
 }

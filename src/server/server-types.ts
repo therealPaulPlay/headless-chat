@@ -23,7 +23,6 @@ export type CleanupOptions = {
     messageAfterDays?: number | null,
     conversationAfterInactiveDays?: number | null,
     inviteAfterDays?: number | null,
-    activityCacheLifetimeMinutes?: number,
 }
 
 export type ResolvedRateLimits = {
@@ -39,7 +38,6 @@ export type ResolvedCleanup = {
     messageAfterDays: number | null,
     conversationAfterInactiveDays: number | null,
     inviteAfterDays: number | null,
-    activityCacheLifetimeMinutes: number,
 }
 
 export type Handler<Args extends unknown[], R> = (...args: Args) => R | Promise<R>;
@@ -53,25 +51,25 @@ export type Handlers = {
 
     readConversations?: Handler<[string], Conversation[]>,
     readMessages?: Handler<[string, string | null, boolean, number], { messages: Message[], remainingInDirection: number }>,
-    readInvites?: Handler<[string], Invite[]>,
+    readInvitesInvolvingParticipant?: Handler<[string], Invite[]>, // (participantId), returns all invites where this participant is the sender or recipient
+    readInvitesForRecipient?: Handler<[string, string], Invite[]>, // (conversationId, toParticipantId), returns all invites the recipient has for the conversation across all senders
     readAliases?: Handler<[string[]], Alias[]>,
     readConversationParticipantActivity?: Handler<[string, string], ParticipantActivity | null>,
     readParticipantActivities?: Handler<[string], ParticipantActivity[]>,
     readMessage?: Handler<[string], Message | null>,
     readConversationLastMessage?: Handler<[string], { messageId: string, createdAt: Date } | null>,
     readConversation?: Handler<[string], Conversation | null>,
-    readInvite?: Handler<[string, string], Invite | null>,
+    readInvite?: Handler<[string, string, string], Invite | null>, // (conversationId, fromParticipantId, toParticipantId)
     readReaction?: Handler<[string], Reaction | null>,
 
     addConversationParticipant?: Handler<[string, string, number], void>,
-    removeConversationParticipant?: Handler<[string, string], void>,
+    removeConversationParticipantAndDeleteParticipantActivity?: Handler<[string, string], void>, // (conversationId, participantId) - atomically remove the participant from the conversation and delete their participant activity row
     updateMessage?: Handler<[Message], void>,
     updateConversationParticipantActivity?: Handler<[ParticipantActivity], void>,
 
     deleteReaction?: Handler<[string], void>,
     deleteConversationWithMessagesReactionsInvitesAndActivities?: Handler<[string], { deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }>,
-    deleteInvites?: Handler<[{ conversationId: string, toParticipantId: string }[]], void>,
-    deleteConversationParticipantActivities?: Handler<[string[], string[]], void>,
+    deleteInvites?: Handler<[{ conversationId: string, fromParticipantId: string, toParticipantId: string }[]], void>,
     deleteMessagesBefore?: Handler<[Date], void>,
     deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore?: Handler<[Date], { deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] }>,
     deleteInvitesBefore?: Handler<[Date], { deletedInvites: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] }>,

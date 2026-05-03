@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import type { Conversation, Indicator, Invite, Message, ParticipantActivity } from "../src/shared/shared-types.js";
 import { FakeTransport, tick } from "./helpers/wire.js";
 
-describe("e2e", () => {
+describe("mixed real-world scenarios", () => {
     let transport: FakeTransport;
 
     beforeEach(() => { transport = new FakeTransport(); });
@@ -348,6 +348,65 @@ describe("e2e", () => {
         expect(bobActivities.some(a => a.conversationId === conversationId)).toBe(true);
     });
 
+    test("multiple senders inviting the same recipient, accept removes all of them but unrelated invites are preserved", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const charlie = transport.addClient("charlie");
+        const dave = transport.addClient("dave");
+        // simon and eve only need to exist as users for invite recipient validation
+        transport.addClient("simon");
+        transport.addClient("eve");
+
+        // Alice creates the conversation, bob and charlie join
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        await alice.createInvite(conversationId, "charlie");
+        await charlie.acceptInvite(conversationId);
+
+        // Both bob and charlie invite dave to the same conversation
+        await bob.createInvite(conversationId, "dave");
+        await charlie.createInvite(conversationId, "dave");
+
+        // Unrelated invites that must be preserved across dave's accept
+        // Bob's invite to simon for the same conversation - different recipient, must stay
+        await bob.createInvite(conversationId, "simon");
+        // Dave invites eve to a different conversation - different conversation, must stay
+        const otherConversationId = await dave.createConversation();
+        await dave.createInvite(otherConversationId, "eve");
+
+        // Pre-condition: dave has two distinct invites for the target conversation
+        const davesInvitesBeforeAccept = await dave.getInvites("dave");
+        const forConversation = davesInvitesBeforeAccept.filter(i => i.conversation.conversationId === conversationId);
+        expect(forConversation).toHaveLength(2);
+        expect(forConversation.map(i => i.fromParticipantId).sort()).toEqual(["bob", "charlie"]);
+
+        // Both inviters subscribe to onInvite to verify they receive deletion events
+        const bobInviteEvents: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+        const charlieInviteEvents: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+        await bob.onInvite(e => bobInviteEvents.push(e));
+        await charlie.onInvite(e => charlieInviteEvents.push(e));
+
+        await dave.acceptInvite(conversationId);
+        await tick();
+
+        // Both dave-invites are gone from the store
+        expect(transport.store.invites.filter(i => i.conversation.conversationId === conversationId && i.toParticipantId === "dave")).toHaveLength(0);
+
+        // Bob's invite to simon for the same conversation is preserved
+        expect(transport.store.invites.find(i => i.conversation.conversationId === conversationId && i.toParticipantId === "simon" && i.fromParticipantId === "bob")).toBeTruthy();
+        // Dave's invite to eve in a different conversation is preserved
+        expect(transport.store.invites.find(i => i.conversation.conversationId === otherConversationId && i.toParticipantId === "eve" && i.fromParticipantId === "dave")).toBeTruthy();
+
+        // Bob and charlie each see THEIR invite to dave deleted
+        expect(bobInviteEvents.some(e => e.conversationId === conversationId && e.toParticipantId === "dave" && e.data === null)).toBe(true);
+        expect(charlieInviteEvents.some(e => e.conversationId === conversationId && e.toParticipantId === "dave" && e.data === null)).toBe(true);
+
+        // Dave is now a participant
+        const convs = await dave.getConversations("dave");
+        expect(convs.find(c => c.conversationId === conversationId)?.participants).toEqual(expect.arrayContaining(["alice", "bob", "charlie", "dave"]));
+    });
+
     test("rate limits message sends", async () => {
         const tight = new FakeTransport({ messageLimitPerSecond: 2 });
         try {
@@ -360,6 +419,403 @@ describe("e2e", () => {
             await alice.sendMessage(conversationId, "1");
             await alice.sendMessage(conversationId, "2");
             await expect(alice.sendMessage(conversationId, "3")).rejects.toThrow(/rate limit/i);
+        } finally {
+            tight.stop();
+        }
+    });
+});
+
+describe("cache invalidation", () => {
+    let transport: FakeTransport;
+
+    beforeEach(() => { transport = new FakeTransport(); });
+    afterEach(() => { transport.stop(); });
+
+    test("createConversation populates the cache and matches DB", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+
+        const cached = transport.conversationCache.get(conversationId);
+        expect(cached).toBeTruthy();
+        expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+    });
+
+    test("getConversations warms the cache for each returned row", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+
+        // Drop the cache so we observe the warming effect of getConversations
+        transport.conversationCache.invalidate(conversationId);
+        await alice.getConversations("alice");
+
+        const cached = transport.conversationCache.get(conversationId);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+    });
+
+    test("sendMessage patches lastMessage and lastActivityAt without re-reading the conversation", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Baseline: cache is warm from createConversation + accept flow
+        transport.store.resetCounts();
+        const messageId = await alice.sendMessage(conversationId, "hello");
+
+        // The cached snapshot reflects the new lastMessage and matches what the DB would surface
+        const cached = transport.conversationCache.get(conversationId);
+        expect(cached?.lastMessage?.messageId).toBe(messageId);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+        // No extra readConversation hit during sendMessage, the patch path avoided it
+        expect(transport.store.countOf("readConversation")).toBe(0);
+    });
+
+    test("editMessage patches the cached lastMessage when editing the conversation's last message", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        const messageId = await alice.sendMessage(conversationId, "original");
+
+        await alice.editMessage(messageId, "edited");
+
+        const cached = transport.conversationCache.get(conversationId);
+        expect(cached?.lastMessage?.message).toBe("edited");
+        expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+    });
+
+    test("editMessage does not touch the cache when editing a non-last message", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        const oldMessageId = await alice.sendMessage(conversationId, "old");
+        await alice.sendMessage(conversationId, "newer");
+
+        const beforeEdit = transport.conversationCache.get(conversationId);
+        await alice.editMessage(oldMessageId, "old edited");
+        const afterEdit = transport.conversationCache.get(conversationId);
+
+        // Cache lastMessage unchanged (still points to "newer") and still matches DB
+        expect(afterEdit?.lastMessage?.message).toBe(beforeEdit?.lastMessage?.message);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, afterEdit)).toBe(true);
+    });
+
+    test("deleteMessage tombstones in cache when deleting the conversation's last message", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        const messageId = await alice.sendMessage(conversationId, "soon to be tombstoned");
+
+        await alice.deleteMessage(messageId);
+
+        const cached = transport.conversationCache.get(conversationId);
+        expect(cached?.lastMessage?.deleted).toBe(true);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+    });
+
+    test("addReaction to lastMessage patches the cached snapshot", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        const messageId = await alice.sendMessage(conversationId, "react to me");
+
+        await bob.addReaction(messageId, "👍");
+
+        const cached = transport.conversationCache.get(conversationId);
+        expect(cached?.lastMessage?.reactions.find(r => r.participantId === "bob")?.content).toBe("👍");
+        expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+    });
+
+    test("addReaction by the same participant replaces their prior reaction (one-per-(message, participant))", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        const messageId = await alice.sendMessage(conversationId, "react");
+
+        await bob.addReaction(messageId, "👍");
+        await bob.addReaction(messageId, "❤️");
+
+        const cached = transport.conversationCache.get(conversationId);
+        const bobReactions = cached?.lastMessage?.reactions.filter(r => r.participantId === "bob") ?? [];
+        expect(bobReactions).toHaveLength(1);
+        expect(bobReactions[0]?.content).toBe("❤️");
+        expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+    });
+
+    test("removeReaction patches the cached snapshot when removing from the lastMessage", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        const messageId = await alice.sendMessage(conversationId, "react then unreact");
+        await bob.addReaction(messageId, "👍");
+        const cachedAfterAdd = transport.conversationCache.get(conversationId);
+        const reactionId = cachedAfterAdd!.lastMessage!.reactions[0]!.reactionId;
+
+        await bob.removeReaction(reactionId);
+
+        const cached = transport.conversationCache.get(conversationId);
+        expect(cached?.lastMessage?.reactions).toHaveLength(0);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+    });
+
+    test("addReaction on a non-last message does not touch the conversation cache", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        const oldMessageId = await alice.sendMessage(conversationId, "old");
+        await alice.sendMessage(conversationId, "newer");
+
+        const before = transport.conversationCache.get(conversationId);
+        await bob.addReaction(oldMessageId, "👍");
+        const after = transport.conversationCache.get(conversationId);
+
+        expect(after?.lastMessage?.messageId).toBe(before?.lastMessage?.messageId);
+        expect(after?.lastMessage?.reactions).toHaveLength(0);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, after)).toBe(true);
+    });
+
+    test("acceptInvite invalidates so participants list is fresh on next read", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+
+        // Pre-condition: cache holds alice-only
+        const beforeJoin = transport.conversationCache.get(conversationId);
+        expect(beforeJoin?.participants).toEqual(["alice"]);
+
+        await bob.acceptInvite(conversationId);
+
+        // After acceptance, the cache must have been invalidated (or refreshed) to reflect bob
+        const cached = transport.conversationCache.get(conversationId);
+        // If still cached, it must match the fresh DB state with bob included
+        if (cached) expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+        // Force a read to confirm the surfaced state has bob, regardless of whether the cache hit or refilled
+        const fresh = (await alice.getConversations("alice")).find(c => c.conversationId === conversationId);
+        expect(fresh?.participants).toEqual(expect.arrayContaining(["alice", "bob"]));
+    });
+
+    test("leaveConversation (non-auto-delete) invalidates the cache", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        await bob.leaveConversation(conversationId);
+
+        const cached = transport.conversationCache.get(conversationId);
+        if (cached) expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+        // The DB must reflect bob's removal
+        const fresh = (await alice.getConversations("alice")).find(c => c.conversationId === conversationId);
+        expect(fresh?.participants).toEqual(["alice"]);
+    });
+
+    test("leaveConversation (auto-delete) invalidates the cache so subsequent reads return null", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+
+        await alice.leaveConversation(conversationId);
+
+        // Cache entry gone, DB row gone, both agree on undefined / no record
+        const cached = transport.conversationCache.get(conversationId);
+        expect(cached).toBeUndefined();
+        expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+    });
+
+    test("readConversation cache hit avoids the DB join across repeated operations", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Reset counts after the join flow has settled
+        transport.store.resetCounts();
+
+        await alice.sendMessage(conversationId, "first");
+        await alice.sendMessage(conversationId, "second");
+        await alice.sendMessage(conversationId, "third");
+
+        // Three sends, zero readConversation calls thanks to the patch path
+        expect(transport.store.countOf("readConversation")).toBe(0);
+    });
+
+    test("getMessages warms the activity cache so the next read-state write skips readConversationParticipantActivity", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        await alice.sendMessage(conversationId, "first");
+
+        transport.store.resetCounts();
+        // First getMessages triggers the activity creation, populates the cache
+        await bob.getMessages(conversationId, null, false, 10);
+        const firstReadCount = transport.store.countOf("readConversationParticipantActivity");
+
+        // Second getMessages with a newer message - cache hit means no extra activity row read
+        await alice.sendMessage(conversationId, "second");
+        await bob.getMessages(conversationId, null, false, 10);
+        const secondReadCount = transport.store.countOf("readConversationParticipantActivity");
+
+        expect(secondReadCount).toBe(firstReadCount); // No additional activity DB read
+    });
+
+    test("getParticipantActivities warms the activity cache", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        await alice.sendMessage(conversationId, "first");
+        await bob.getMessages(conversationId, null, false, 10);
+
+        // Drop the cache to observe the warming effect
+        transport.activityCache.invalidate(`${conversationId}|bob`);
+        await bob.getParticipantActivities();
+
+        const cached = transport.activityCache.get(`${conversationId}|bob`);
+        expect(transport.store.cachedActivityMatchesDb(conversationId, "bob", cached)).toBe(true);
+    });
+
+    test("leaveConversation invalidates the activity cache for the leaver", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        await alice.sendMessage(conversationId, "msg");
+        await bob.getMessages(conversationId, null, false, 10);
+
+        // Pre-condition: activity exists in cache and DB
+        const before = transport.activityCache.get(`${conversationId}|bob`);
+        expect(before).toBeDefined();
+
+        await bob.leaveConversation(conversationId);
+
+        const cached = transport.activityCache.get(`${conversationId}|bob`);
+        expect(cached).toBeUndefined();
+        expect(transport.store.cachedActivityMatchesDb(conversationId, "bob", cached)).toBe(true);
+    });
+
+    test("admin joinConversation invalidates the cache so participants list is fresh on next read", async () => {
+        const alice = transport.addClient("alice");
+        transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+
+        // Pre-condition: cache holds alice-only
+        expect(transport.conversationCache.get(conversationId)?.participants).toEqual(["alice"]);
+
+        // Admin path - bypass invite flow
+        await transport.server.joinConversation(conversationId, "bob");
+
+        const cached = transport.conversationCache.get(conversationId);
+        if (cached) expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+        const fresh = (await alice.getConversations("alice")).find(c => c.conversationId === conversationId);
+        expect(fresh?.participants).toEqual(expect.arrayContaining(["alice", "bob"]));
+    });
+
+    test("admin sendMessage with a systemEvent patches the cached lastMessage", async () => {
+        const alice = transport.addClient("alice");
+        transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await transport.server.joinConversation(conversationId, "bob");
+
+        // Admin path posts a custom system message
+        const messageId = await transport.server.sendMessage(
+            conversationId,
+            "server",
+            "",
+            { referenceMessageId: null, isForwarded: false },
+            { type: "participantJoined", participantId: "bob" },
+        );
+
+        const cached = transport.conversationCache.get(conversationId);
+        expect(cached?.lastMessage?.messageId).toBe(messageId);
+        expect(cached?.lastMessage?.systemEvent?.type).toBe("participantJoined");
+        expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+    });
+
+    test("admin deleteParticipant invalidates the cache for a conversation that survives the participant's removal", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Pre-condition: cache holds both participants
+        expect(transport.conversationCache.get(conversationId)?.participants).toEqual(expect.arrayContaining(["alice", "bob"]));
+
+        await transport.server.deleteParticipant("bob");
+
+        const cached = transport.conversationCache.get(conversationId);
+        if (cached) expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+        const fresh = (await alice.getConversations("alice")).find(c => c.conversationId === conversationId);
+        expect(fresh?.participants).toEqual(["alice"]);
+    });
+
+    test("admin deleteParticipant does not affect unrelated cached conversations", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const charlie = transport.addClient("charlie");
+
+        const involvingBob = await alice.createConversation();
+        await alice.createInvite(involvingBob, "bob");
+        await bob.acceptInvite(involvingBob);
+
+        const unrelated = await alice.createConversation();
+        await alice.createInvite(unrelated, "charlie");
+        await charlie.acceptInvite(unrelated);
+
+        await transport.server.deleteParticipant("bob");
+
+        const cachedUnrelated = transport.conversationCache.get(unrelated);
+        expect(cachedUnrelated?.participants).toEqual(expect.arrayContaining(["alice", "charlie"]));
+        expect(transport.store.cachedConversationMatchesDb(unrelated, cachedUnrelated)).toBe(true);
+    });
+
+    test("daily cleanup of inactive conversations invalidates their cache entries", async () => {
+        const tight = new FakeTransport(undefined, { conversationAfterInactiveDays: 1 });
+        try {
+            const alice = tight.addClient("alice");
+            const bob = tight.addClient("bob");
+            const conversationId = await alice.createConversation();
+            await alice.createInvite(conversationId, "bob");
+            await bob.acceptInvite(conversationId);
+            await alice.sendMessage(conversationId, "old message");
+
+            // Backdate the conversation in the store so the cleanup picks it up
+            const record = tight.store.conversations.get(conversationId)!;
+            record.lastActivityAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+
+            // Pre-condition: cache holds the conversation
+            expect(tight.conversationCache.get(conversationId)).toBeTruthy();
+
+            // Trigger the daily run directly (the timer-based one runs once per day)
+            await (tight.server as unknown as { scheduler: { runDaily: () => Promise<void> } }).scheduler.runDaily();
+            await tick();
+
+            // Cache and DB both reflect the deletion
+            expect(tight.conversationCache.get(conversationId)).toBeUndefined();
+            expect(tight.store.conversations.has(conversationId)).toBe(false);
+            // Activity cache for the conversation also invalidated
+            expect(tight.activityCache.get(`${conversationId}|alice`)).toBeUndefined();
+            expect(tight.activityCache.get(`${conversationId}|bob`)).toBeUndefined();
         } finally {
             tight.stop();
         }

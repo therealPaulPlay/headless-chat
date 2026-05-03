@@ -3,11 +3,14 @@ import { getHandler } from "../server-types.js";
 import type { ServerContext, ServiceResult } from "../context.js";
 
 export async function getConversations(ctx: ServerContext, participantId: string): Promise<ServiceResult<Conversation[]>> {
-    return { result: await getHandler(ctx.handlers, "readConversations")(participantId), hooks: [] };
+    const result = await getHandler(ctx.handlers, "readConversations")(participantId);
+    // Warm the cache so subsequent per-conversation reads avoid the heavy join
+    for (const conversation of result) ctx.conversationCache.set(conversation.conversationId, conversation);
+    return { result, hooks: [] };
 }
 
 export async function getInvites(ctx: ServerContext, participantId: string): Promise<ServiceResult<Invite[]>> {
-    return { result: await getHandler(ctx.handlers, "readInvites")(participantId), hooks: [] };
+    return { result: await getHandler(ctx.handlers, "readInvitesInvolvingParticipant")(participantId), hooks: [] };
 }
 
 export async function getAliases(ctx: ServerContext, participantIds: string[]): Promise<ServiceResult<Alias[]>> {
