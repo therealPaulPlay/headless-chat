@@ -161,13 +161,6 @@ describe("mixed real-world scenarios", () => {
         }
     });
 
-    test("auth rejection rejects the RPC", async () => {
-        const alice = transport.addClient("alice");
-        // Force bad auth on next request
-        (alice as unknown as { getAuthData: () => unknown }).getAuthData = () => "wrong-token";
-        await expect(alice.createConversation()).rejects.toThrow(/Unauthorized/);
-    });
-
     test("leaveConversation posts a system message, cleans up activity, and deletes empty conversations", async () => {
         const alice = transport.addClient("alice");
         const bob = transport.addClient("bob");
@@ -419,6 +412,37 @@ describe("mixed real-world scenarios", () => {
             await alice.sendMessage(conversationId, "1");
             await alice.sendMessage(conversationId, "2");
             await expect(alice.sendMessage(conversationId, "3")).rejects.toThrow(/rate limit/i);
+        } finally {
+            tight.stop();
+        }
+    });
+
+    test("the per-conversation maxSize set on createConversation rejects further accepts once full", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const charlie = transport.addClient("charlie");
+        // maxSize 2 means alice + one other
+        const conversationId = await alice.createConversation(2);
+        await alice.createInvite(conversationId, "bob");
+        await alice.createInvite(conversationId, "charlie");
+        await bob.acceptInvite(conversationId);
+
+        await expect(charlie.acceptInvite(conversationId)).rejects.toThrow(/full/i);
+    });
+
+    test("the global conversationParticipantLimit takes precedence over a higher maxSize", async () => {
+        const tight = new FakeTransport({ conversationParticipantLimit: 2 });
+        try {
+            const alice = tight.addClient("alice");
+            const bob = tight.addClient("bob");
+            const charlie = tight.addClient("charlie");
+            // maxSize 100 but the global cap is 2
+            const conversationId = await alice.createConversation(100);
+            await alice.createInvite(conversationId, "bob");
+            await alice.createInvite(conversationId, "charlie");
+            await bob.acceptInvite(conversationId);
+
+            await expect(charlie.acceptInvite(conversationId)).rejects.toThrow(/full/i);
         } finally {
             tight.stop();
         }
@@ -819,5 +843,723 @@ describe("cache invalidation", () => {
         } finally {
             tight.stop();
         }
+    });
+});
+
+describe("admin functions", () => {
+    let transport: FakeTransport;
+
+    beforeEach(() => {
+        transport = new FakeTransport();
+        // A reject-everything auth handler ensures the bypass tests prove the admin path actually skips it
+        transport.server.onParticipantAuth(() => false);
+    });
+    afterEach(() => { transport.stop(); });
+
+    test("createConversation bypasses participantAuth (which rejects all)", async () => {
+        transport.store.users.add("alice");
+        const conversationId = await transport.server.createConversation("alice");
+        expect(transport.store.conversations.has(conversationId)).toBe(true);
+        expect(transport.store.conversationParticipants.get(conversationId)?.has("alice")).toBe(true);
+    });
+
+    test("createInvite bypasses participantAuth but inviteAuth still runs", async () => {
+        transport.store.users.add("alice");
+        transport.store.users.add("bob");
+        const conversationId = await transport.server.createConversation("alice");
+
+        // inviteAuth blocks, admin must respect this
+        transport.server.onInviteAuth(() => false);
+        await expect(transport.server.createInvite(conversationId, "alice", "bob")).rejects.toThrow(/Not authorized/);
+
+        // With inviteAuth allowing, admin invite goes through (participantAuth is still rejecting all, proving the bypass)
+        transport.server.onInviteAuth(() => true);
+        await transport.server.createInvite(conversationId, "alice", "bob");
+        expect(transport.store.invites.find(i => i.conversation.conversationId === conversationId && i.toParticipantId === "bob")).toBeTruthy();
+    });
+
+    test("createInvite admin bypasses inviteLimitPerHour rate limit", async () => {
+        const tight = new FakeTransport({ inviteLimitPerHour: 1 });
+        try {
+            tight.server.onParticipantAuth(() => false); // Block client-side auth
+            tight.store.users.add("alice");
+            tight.store.users.add("bob");
+            tight.store.users.add("charlie");
+            const conversationId = await tight.server.createConversation("alice");
+
+            // Admin path can issue more than the per-hour limit
+            await tight.server.createInvite(conversationId, "alice", "bob");
+            await expect(tight.server.createInvite(conversationId, "alice", "charlie")).resolves.toBeUndefined();
+            expect(tight.store.invites.filter(i => i.conversation.conversationId === conversationId)).toHaveLength(2);
+        } finally {
+            tight.stop();
+        }
+    });
+
+    test("acceptInvite bypasses participantAuth", async () => {
+        transport.store.users.add("alice");
+        transport.store.users.add("bob");
+        const conversationId = await transport.server.createConversation("alice");
+        await transport.server.createInvite(conversationId, "alice", "bob");
+
+        await transport.server.acceptInvite(conversationId, "bob");
+        expect(transport.store.conversationParticipants.get(conversationId)?.has("bob")).toBe(true);
+    });
+
+    test("revokeInvite bypasses participantAuth and ownership check", async () => {
+        transport.store.users.add("alice");
+        transport.store.users.add("bob");
+        const conversationId = await transport.server.createConversation("alice");
+        await transport.server.createInvite(conversationId, "alice", "bob");
+
+        // Admin caller is not alice (not the inviter), but the ownership check is skipped
+        await transport.server.revokeInvite(conversationId, "alice", "bob");
+        expect(transport.store.invites.find(i => i.conversation.conversationId === conversationId && i.toParticipantId === "bob")).toBeUndefined();
+    });
+
+    test("joinConversation bypasses participantAuth and the invite requirement", async () => {
+        transport.store.users.add("alice");
+        transport.store.users.add("bob");
+        const conversationId = await transport.server.createConversation("alice");
+
+        // No invite created, admin direct-add still works
+        await transport.server.joinConversation(conversationId, "bob");
+        expect(transport.store.conversationParticipants.get(conversationId)?.has("bob")).toBe(true);
+    });
+
+    test("leaveConversation bypasses participantAuth", async () => {
+        transport.store.users.add("alice");
+        transport.store.users.add("bob");
+        const conversationId = await transport.server.createConversation("alice");
+        await transport.server.joinConversation(conversationId, "bob");
+
+        await transport.server.leaveConversation(conversationId, "bob");
+        expect(transport.store.conversationParticipants.get(conversationId)?.has("bob")).toBe(false);
+    });
+
+    test("sendMessage admin bypasses participantAuth, rate limit, and profanity check", async () => {
+        const tight = new FakeTransport({ messageLimitPerSecond: 1 });
+        try {
+            tight.server.onParticipantAuth(() => false); // Block client-side auth
+            tight.server.onProfanityCheckBlock(() => false); // Reject everything
+
+            tight.store.users.add("alice");
+            const conversationId = await tight.server.createConversation("alice");
+
+            const id1 = await tight.server.sendMessage(conversationId, "alice", "msg1");
+            const id2 = await tight.server.sendMessage(conversationId, "alice", "msg2");
+            const id3 = await tight.server.sendMessage(conversationId, "alice", "msg3");
+            expect(tight.store.messages.has(id1)).toBe(true);
+            expect(tight.store.messages.has(id2)).toBe(true);
+            expect(tight.store.messages.has(id3)).toBe(true);
+        } finally {
+            tight.stop();
+        }
+    });
+
+    test("sendMessage admin can post system messages with the reserved 'server' participantId", async () => {
+        transport.store.users.add("alice");
+        const conversationId = await transport.server.createConversation("alice");
+
+        const messageId = await transport.server.sendMessage(
+            conversationId,
+            "server",
+            "",
+            { referenceMessageId: null, isForwarded: false },
+            { type: "participantJoined", participantId: "alice" },
+        );
+        expect(transport.store.messages.get(messageId)?.systemEvent?.type).toBe("participantJoined");
+        expect(transport.store.messages.get(messageId)?.participantId).toBe("server");
+    });
+});
+
+describe("server reserved participantId", () => {
+    let transport: FakeTransport;
+
+    beforeEach(() => { transport = new FakeTransport(); });
+    afterEach(() => { transport.stop(); });
+
+    test("a client claiming participantId='server' is rejected as Unauthorized", async () => {
+        // Build a client that lies about its participantId
+        const malicious = transport.addClient("server");
+        // The auth handler returns true for matching tokens, but the lib should still reject "server" before auth runs
+        await expect(malicious.createConversation()).rejects.toThrow(/Unauthorized/);
+    });
+});
+
+describe("subscription handling", () => {
+    let transport: FakeTransport;
+
+    beforeEach(() => { transport = new FakeTransport(); });
+    afterEach(() => { transport.stop(); });
+
+    test("after off* resolves, no further events of that scope arrive", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        // Used as a fresh invite recipient that must exist as a user
+        transport.addClient("charlie");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Subscribe to all five event types
+        const messages: Message[] = [];
+        const indicators: Indicator[][] = [];
+        const conversations: { conversationId: string, data: Conversation | null }[] = [];
+        const invites: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+        const activities: ParticipantActivity[] = [];
+        const messageHandler = (m: Message) => messages.push(m);
+        const indicatorHandler = (i: Indicator[]) => indicators.push(i);
+        const conversationHandler = (e: { conversationId: string, data: Conversation | null }) => conversations.push(e);
+        const inviteHandler = (e: { conversationId: string, toParticipantId: string, data: Invite | null }) => invites.push(e);
+        const activityHandler = (a: ParticipantActivity) => activities.push(a);
+
+        await bob.onMessage(conversationId, messageHandler);
+        await bob.onIndicators(conversationId, indicatorHandler);
+        await alice.onConversation(conversationHandler);
+        await alice.onInvite(inviteHandler);
+        await bob.onParticipantActivity(activityHandler);
+
+        // Trigger one of each while subscribed
+        await alice.sendMessage(conversationId, "while subscribed");
+        await alice.setIndicator(conversationId);
+        await alice.createInvite(conversationId, "charlie"); // Fresh invite, will broadcast
+        await tick();
+
+        // All five should have received at least one event
+        expect(messages.length).toBeGreaterThan(0);
+        expect(indicators.length).toBeGreaterThan(0);
+        expect(conversations.length).toBeGreaterThan(0);
+        expect(invites.length).toBeGreaterThan(0);
+        expect(activities.length).toBeGreaterThan(0);
+
+        // Unsubscribe everything, then let any side-effect chains (e.g. read-marker activity from offMessage) settle before snapshotting baseline
+        await bob.offMessage(messageHandler);
+        await bob.offIndicators(indicatorHandler);
+        await alice.offConversation(conversationHandler);
+        await alice.offInvite(inviteHandler);
+        await bob.offParticipantActivity(activityHandler);
+        await tick();
+
+        const preMessages = messages.length;
+        const preIndicators = indicators.length;
+        const preConversations = conversations.length;
+        const preInvites = invites.length;
+        const preActivities = activities.length;
+
+        // Trigger every type of update again
+        const dave = transport.addClient("dave");
+        await alice.sendMessage(conversationId, "after off"); // message + activity (synthetic) + conversation broadcasts
+        await alice.setIndicator(conversationId); // indicators broadcast
+        await alice.createInvite(conversationId, "dave"); // invite broadcast
+        await dave.acceptInvite(conversationId); // conversation broadcast (refresh) + activity (for new participant)
+        await tick();
+
+        expect(messages.length).toBe(preMessages);
+        expect(indicators.length).toBe(preIndicators);
+        expect(conversations.length).toBe(preConversations);
+        expect(invites.length).toBe(preInvites);
+        expect(activities.length).toBe(preActivities);
+    });
+});
+
+describe("error handling", () => {
+    test("safeDispatch swallows consumer dispatch errors so other recipients still receive their events", async () => {
+        // Custom transport that throws when dispatching to bob, succeeds for alice
+        const aliceReceived: unknown[] = [];
+        const server = new (await import("../src/server/server.js")).Server((participantId, data) => {
+            if (participantId === "bob") throw new Error("bob's dispatch is broken");
+            if (participantId === "alice") aliceReceived.push(data);
+        });
+        try {
+            const store = new (await import("./helpers/store.js")).InMemoryStore();
+            store.register(server);
+            store.users.add("alice");
+            store.users.add("bob");
+            server.onParticipantAuth(() => true);
+
+            // Both subscribe to the conversation scope
+            await server.receive({ type: "subscribe", participantId: "alice", authData: null, scope: "conversation" });
+            await server.receive({ type: "subscribe", participantId: "bob", authData: null, scope: "conversation" });
+
+            // Admin createConversation triggers broadcastConversation to both, bob's dispatch throws but the loop must continue to alice
+            await expect(server.createConversation("alice")).resolves.toBeTruthy();
+
+            // Alice still got the broadcast despite bob's dispatch throwing
+            expect(aliceReceived.length).toBeGreaterThan(0);
+        } finally {
+            server.stop();
+        }
+    });
+
+    test("after-hook errors are swallowed, subsequent operations still work", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            const conversationId = await alice.createConversation();
+
+            transport.server.onAfterMessageCreated(() => { throw new Error("hook is broken"); });
+
+            await alice.sendMessage(conversationId, "first");
+            await tick();
+            // The thrown hook didn't propagate or break the server state - second send still works
+            await expect(alice.sendMessage(conversationId, "second")).resolves.toBeTruthy();
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("emitMessageById swallows readMessage errors after the underlying mutation has already happened", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            const bob = transport.addClient("bob");
+            const conversationId = await alice.createConversation();
+            await alice.createInvite(conversationId, "bob");
+            await bob.acceptInvite(conversationId);
+            const messageId = await alice.sendMessage(conversationId, "react this");
+            await bob.addReaction(messageId, "👍");
+            const reactionId = transport.store.messages.get(messageId)!.reactions[0]!.reactionId;
+
+            // RemoveReaction flows readReaction -> deleteReaction -> emitMessageById, the broadcast step fails internally
+            transport.server.onReadMessage(() => { throw new Error("read is broken"); });
+
+            // The reaction should still be removed - the broken broadcast is swallowed, not propagated
+            await expect(bob.removeReaction(reactionId)).resolves.toBeUndefined();
+            expect(transport.store.messages.get(messageId)?.reactions.length).toBe(0);
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("participantAuth handler that throws rejects the RPC just like returning false", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            transport.server.onParticipantAuth(() => { throw new Error("auth blew up"); });
+
+            await expect(alice.createConversation()).rejects.toThrow(/Unauthorized/);
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("participantAuth returning false rejects the RPC", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            // Force bad auth on the next request
+            (alice as unknown as { getAuthData: () => unknown }).getAuthData = () => "wrong-token";
+            await expect(alice.createConversation()).rejects.toThrow(/Unauthorized/);
+        } finally {
+            transport.stop();
+        }
+    });
+});
+
+describe("cleanup broadcasts", () => {
+    async function runDaily(transport: FakeTransport): Promise<void> {
+        await (transport.server as unknown as { scheduler: { runDaily: () => Promise<void> } }).scheduler.runDaily();
+        await tick();
+    }
+
+    test("daily inactive cleanup broadcasts conversationDeleted to former participants, fires the hook, and cascades to messages and reactions", async () => {
+        const transport = new FakeTransport(undefined, { conversationAfterInactiveDays: 1 });
+        try {
+            const alice = transport.addClient("alice");
+            const bob = transport.addClient("bob");
+            const conversationId = await alice.createConversation();
+            await alice.createInvite(conversationId, "bob");
+            await bob.acceptInvite(conversationId);
+            const messageId = await alice.sendMessage(conversationId, "hello");
+            await bob.addReaction(messageId, "👍");
+
+            const aliceConvEvents: { conversationId: string, data: Conversation | null }[] = [];
+            await alice.onConversation(e => aliceConvEvents.push(e));
+
+            const conversationDeletedHooks: string[] = [];
+            transport.server.onAfterConversationDeleted(id => { conversationDeletedHooks.push(id); });
+
+            // Pre-condition: messages and reactions exist for the conversation
+            expect([...transport.store.messages.values()].some(m => m.conversationId === conversationId)).toBe(true);
+            expect([...transport.store.messages.values()].some(m => m.reactions.length > 0)).toBe(true);
+
+            transport.store.conversations.get(conversationId)!.lastActivityAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+            await runDaily(transport);
+
+            expect(aliceConvEvents.some(e => e.conversationId === conversationId && e.data === null)).toBe(true);
+            expect(conversationDeletedHooks).toContain(conversationId);
+            // The cascade removed the conversation's messages and reactions
+            expect([...transport.store.messages.values()].some(m => m.conversationId === conversationId)).toBe(false);
+            expect([...transport.store.messages.values()].some(m => m.reactions.length > 0)).toBe(false);
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("daily conversationAfterInactiveDays cleanup cascades to invites, broadcasting inviteDeleted and firing the hook for every attached invite", async () => {
+        const transport = new FakeTransport(undefined, { conversationAfterInactiveDays: 1 });
+        try {
+            const alice = transport.addClient("alice");
+            transport.addClient("bob");
+            transport.addClient("charlie");
+            const conversationId = await alice.createConversation();
+            await alice.createInvite(conversationId, "bob");
+            await alice.createInvite(conversationId, "charlie");
+
+            const aliceInviteEvents: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+            await alice.onInvite(e => aliceInviteEvents.push(e));
+
+            const inviteDeletedHooks: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] = [];
+            transport.server.onAfterInviteDeleted((c, f, t) => { inviteDeletedHooks.push({ conversationId: c, fromParticipantId: f, toParticipantId: t }); });
+
+            transport.store.conversations.get(conversationId)!.lastActivityAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+            await runDaily(transport);
+
+            // Both invites attached to the deleted conversation get broadcast + hook-fired
+            for (const recipient of ["bob", "charlie"]) {
+                expect(aliceInviteEvents.some(e => e.toParticipantId === recipient && e.data === null)).toBe(true);
+                expect(inviteDeletedHooks.some(h => h.fromParticipantId === "alice" && h.toParticipantId === recipient)).toBe(true);
+            }
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("daily deleteInvitesBefore broadcasts inviteDeleted to inviter + invitee and fires the hook", async () => {
+        const transport = new FakeTransport(undefined, { inviteAfterDays: 1 });
+        try {
+            const alice = transport.addClient("alice");
+            const bob = transport.addClient("bob");
+            const conversationId = await alice.createConversation();
+            await alice.createInvite(conversationId, "bob");
+
+            const aliceInviteEvents: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+            const bobInviteEvents: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+            await alice.onInvite(e => aliceInviteEvents.push(e));
+            await bob.onInvite(e => bobInviteEvents.push(e));
+
+            const inviteDeletedHooks: { fromParticipantId: string, toParticipantId: string }[] = [];
+            transport.server.onAfterInviteDeleted((_c, f, t) => { inviteDeletedHooks.push({ fromParticipantId: f, toParticipantId: t }); });
+
+            transport.store.invites.find(i => i.toParticipantId === "bob")!.createdAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+            await runDaily(transport);
+
+            expect(aliceInviteEvents.some(e => e.toParticipantId === "bob" && e.data === null)).toBe(true);
+            expect(bobInviteEvents.some(e => e.toParticipantId === "bob" && e.data === null)).toBe(true);
+            expect(inviteDeletedHooks.some(h => h.fromParticipantId === "alice" && h.toParticipantId === "bob")).toBe(true);
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("daily messageAfterDays cleanup deletes old messages and invalidates cached conversations whose lastMessage was deleted", async () => {
+        const transport = new FakeTransport(undefined, { messageAfterDays: 1 });
+        try {
+            const alice = transport.addClient("alice");
+            const conversationId = await alice.createConversation();
+            const oldMessageId = await alice.sendMessage(conversationId, "old");
+
+            // Backdate the state so the cleanup considers this message stale, in both the store and the cached snapshot
+            const backdated = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+            transport.store.messages.get(oldMessageId)!.createdAt = backdated;
+            const cached = transport.conversationCache.get(conversationId)!;
+            cached.lastMessage!.createdAt = backdated;
+            transport.conversationCache.set(conversationId, cached);
+
+            await runDaily(transport);
+
+            expect(transport.store.messages.has(oldMessageId)).toBe(false);
+            // Cache entry got invalidated by the cleanup since its lastMessage was older than the threshold
+            expect(transport.conversationCache.get(conversationId)).toBeUndefined();
+            // After a fresh read, the conversation has no lastMessage and cache + DB agree
+            const fresh = (await alice.getConversations("alice")).find(c => c.conversationId === conversationId);
+            expect(fresh?.lastMessage).toBeNull();
+            expect(transport.store.cachedConversationMatchesDb(conversationId, transport.conversationCache.get(conversationId))).toBe(true);
+        } finally {
+            transport.stop();
+        }
+    });
+});
+
+describe("client dispose", () => {
+    let transport: FakeTransport;
+
+    beforeEach(() => { transport = new FakeTransport(); });
+    afterEach(() => { transport.stop(); });
+
+    test("dispose rejects in-flight RPC promises", async () => {
+        // Wedge an in-flight request by pointing dispatch at a black hole, the request never gets a response
+        const blackHole = new (await import("../src/client/client.js")).Client(() => { }, "alice", () => "token-alice");
+        const wedged = blackHole.createConversation();
+
+        // Dispose immediately, the wedged promise should reject
+        blackHole.dispose();
+        await expect(wedged).rejects.toThrow(/disposed/i);
+    });
+});
+
+describe("getMessages cursor semantics", () => {
+    let transport: FakeTransport;
+
+    beforeEach(() => { transport = new FakeTransport(); });
+    afterEach(() => { transport.stop(); });
+
+    test("null cursor returns the newest page in ascending order with remainingInDirection counting older messages", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+        const ids: string[] = [];
+        for (let i = 0; i < 5; i++) ids.push(await alice.sendMessage(conversationId, `m${i}`));
+
+        const result = await alice.getMessages(conversationId, null, false, 3);
+
+        // Last 3 messages, ascending
+        expect(result.messages.map(m => m.messageId)).toEqual(ids.slice(2));
+        // Remaining = 2 older messages not returned
+        expect(result.remainingInDirection).toBe(2);
+    });
+
+    test("after: true returns strictly newer messages, excluding the cursor", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+        const ids: string[] = [];
+        for (let i = 0; i < 5; i++) ids.push(await alice.sendMessage(conversationId, `m${i}`));
+
+        const result = await alice.getMessages(conversationId, ids[1]!, true, 10);
+
+        // Newer than ids[1] = ids[2..4], cursor itself excluded
+        expect(result.messages.map(m => m.messageId)).toEqual(ids.slice(2));
+        expect(result.messages.find(m => m.messageId === ids[1])).toBeUndefined();
+        expect(result.remainingInDirection).toBe(0);
+    });
+
+    test("after: false returns strictly older messages, excluding the cursor", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+        const ids: string[] = [];
+        for (let i = 0; i < 5; i++) ids.push(await alice.sendMessage(conversationId, `m${i}`));
+
+        const result = await alice.getMessages(conversationId, ids[3]!, false, 2);
+
+        // Older than ids[3], two most-recent older = ids[1..2], cursor excluded
+        expect(result.messages.map(m => m.messageId)).toEqual([ids[1], ids[2]]);
+        expect(result.messages.find(m => m.messageId === ids[3])).toBeUndefined();
+        // Remaining = 1 older (ids[0])
+        expect(result.remainingInDirection).toBe(1);
+    });
+});
+
+describe("rate limits and capacity caps are per-participant", () => {
+    test("messageLimitPerSecond is enforced per sender, not globally", async () => {
+        const tight = new FakeTransport({ messageLimitPerSecond: 1 });
+        try {
+            const alice = tight.addClient("alice");
+            const bob = tight.addClient("bob");
+            const conversationId = await alice.createConversation();
+            await alice.createInvite(conversationId, "bob");
+            await bob.acceptInvite(conversationId);
+
+            await alice.sendMessage(conversationId, "alice-1");
+            // Alice hit her limit
+            await expect(alice.sendMessage(conversationId, "alice-2")).rejects.toThrow(/rate limit/i);
+            // Bob has his own bucket
+            await expect(bob.sendMessage(conversationId, "bob-1")).resolves.toBeTruthy();
+        } finally {
+            tight.stop();
+        }
+    });
+
+    test("inviteLimitPerHour is enforced per sender, not globally", async () => {
+        const tight = new FakeTransport({ inviteLimitPerHour: 1 });
+        try {
+            const alice = tight.addClient("alice");
+            const bob = tight.addClient("bob");
+            tight.addClient("carol");
+            tight.addClient("dave");
+            const aliceConv = await alice.createConversation();
+            const bobConv = await bob.createConversation();
+
+            await alice.createInvite(aliceConv, "carol");
+            // Alice hit her invite limit
+            await expect(alice.createInvite(aliceConv, "dave")).rejects.toThrow(/rate limit/i);
+            // Bob has his own bucket
+            await expect(bob.createInvite(bobConv, "carol")).resolves.toBeUndefined();
+        } finally {
+            tight.stop();
+        }
+    });
+});
+
+describe("profanity censor", () => {
+    test("onProfanityCheckCensor mutates the outgoing message text", async () => {
+        const transport = new FakeTransport();
+        try {
+            transport.server.onProfanityCheckCensor((message) => message.replace(/badword/gi, "*******"));
+
+            const alice = transport.addClient("alice");
+            const conversationId = await alice.createConversation();
+            const messageId = await alice.sendMessage(conversationId, "hello badword world");
+
+            expect(transport.store.messages.get(messageId)?.message).toBe("hello ******* world");
+        } finally {
+            transport.stop();
+        }
+    });
+});
+
+describe("client invite paths", () => {
+    let transport: FakeTransport;
+
+    beforeEach(() => { transport = new FakeTransport(); });
+    afterEach(() => { transport.stop(); });
+
+    test("client createInvite is gated by onInviteAuth", async () => {
+        transport.server.onInviteAuth(() => false);
+        const alice = transport.addClient("alice");
+        transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+
+        await expect(alice.createInvite(conversationId, "bob")).rejects.toThrow(/Not authorized/);
+        expect(transport.store.invites).toHaveLength(0);
+    });
+
+    test("client declineInvite removes all matching invites and broadcasts inviteDeleted", async () => {
+        const alice = transport.addClient("alice");
+        const charlie = transport.addClient("charlie");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await alice.createInvite(conversationId, "charlie");
+        await charlie.acceptInvite(conversationId);
+        // Charlie can now also invite bob
+        await charlie.createInvite(conversationId, "bob");
+
+        const bobInviteEvents: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+        await bob.onInvite(e => bobInviteEvents.push(e));
+
+        await bob.declineInvite(conversationId);
+        await tick();
+
+        expect(transport.store.invites.filter(i => i.conversation.conversationId === conversationId && i.toParticipantId === "bob")).toHaveLength(0);
+        // Both invite-deleted events landed
+        expect(bobInviteEvents.filter(e => e.toParticipantId === "bob" && e.data === null)).toHaveLength(2);
+    });
+
+    test("client revokeInvite (own invite) removes it but cannot revoke another sender's invite", async () => {
+        const alice = transport.addClient("alice");
+        transport.addClient("bob");
+        const charlie = transport.addClient("charlie");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "charlie");
+        await charlie.acceptInvite(conversationId);
+        // Both alice and charlie invite bob
+        await alice.createInvite(conversationId, "bob");
+        await charlie.createInvite(conversationId, "bob");
+
+        // Charlie revokes their OWN invite to bob, alice's stays
+        await charlie.revokeInvite(conversationId, "bob");
+        const remaining = transport.store.invites.filter(i => i.conversation.conversationId === conversationId && i.toParticipantId === "bob");
+        expect(remaining).toHaveLength(1);
+        expect(remaining[0]?.fromParticipantId).toBe("alice");
+
+        // Charlie tries to revoke alice's invite (doesn't own it) - should reject because the lookup finds nothing
+        await expect(charlie.revokeInvite(conversationId, "bob")).rejects.toThrow(/Invite not found/);
+    });
+});
+
+describe("reconnect", () => {
+    test("client deregisters handlers on disconnect, re-registers on reconnect, and resumes receiving events", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            const bob = transport.addClient("bob");
+            const conversationId = await alice.createConversation();
+            await alice.createInvite(conversationId, "bob");
+            await bob.acceptInvite(conversationId);
+
+            const received: Message[] = [];
+            const handler = (m: Message) => received.push(m);
+            await bob.onMessage(conversationId, handler);
+
+            await alice.sendMessage(conversationId, "before disconnect");
+            await tick();
+            const beforeDisconnect = received.length;
+            expect(beforeDisconnect).toBeGreaterThan(0);
+
+            // Simulated disconnect: client deregisters its handler, server cleans up its subscription
+            await bob.offMessage(handler);
+            transport.server.cleanupParticipant("bob");
+            await tick();
+
+            // While disconnected, bob shouldn't receive new messages
+            await alice.sendMessage(conversationId, "during disconnect");
+            await tick();
+            expect(received.length).toBe(beforeDisconnect);
+
+            // Reconnect: bob re-registers the same handler
+            await bob.onMessage(conversationId, handler);
+            await alice.sendMessage(conversationId, "after reconnect");
+            await tick();
+            expect(received.some(m => m.message === "after reconnect")).toBe(true);
+        } finally {
+            transport.stop();
+        }
+    });
+});
+
+describe("after-hooks", () => {
+    let transport: FakeTransport;
+
+    beforeEach(() => { transport = new FakeTransport(); });
+    afterEach(() => { transport.stop(); });
+
+    test("onAfterParticipantJoined fires when a participant joins via acceptInvite", async () => {
+        const joinedHooks: { conversationId: string, participantId: string }[] = [];
+        transport.server.onAfterParticipantJoined((c, p) => { joinedHooks.push({ conversationId: c, participantId: p }); });
+
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        expect(joinedHooks).toContainEqual({ conversationId, participantId: "bob" });
+    });
+
+    test("onAfterParticipantLeft fires on a regular leave from a non-empty conversation", async () => {
+        const leftHooks: { conversationId: string, participantId: string }[] = [];
+        transport.server.onAfterParticipantLeft((c, p) => { leftHooks.push({ conversationId: c, participantId: p }); });
+
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        await bob.leaveConversation(conversationId);
+
+        expect(leftHooks).toContainEqual({ conversationId, participantId: "bob" });
+    });
+
+    test("onAfterParticipantLeft also fires when the last participant leaves and the conversation auto-deletes", async () => {
+        const leftHooks: { conversationId: string, participantId: string }[] = [];
+        transport.server.onAfterParticipantLeft((c, p) => { leftHooks.push({ conversationId: c, participantId: p }); });
+
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+        await alice.leaveConversation(conversationId);
+
+        expect(leftHooks).toContainEqual({ conversationId, participantId: "alice" });
+    });
+
+    test("onAfterMessageDeleted fires when a message is tombstoned via deleteMessage", async () => {
+        const deletedHooks: Message[] = [];
+        transport.server.onAfterMessageDeleted(m => { deletedHooks.push(m); });
+
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+        const messageId = await alice.sendMessage(conversationId, "to be deleted");
+        await alice.deleteMessage(messageId);
+
+        expect(deletedHooks.some(m => m.messageId === messageId && m.deleted)).toBe(true);
     });
 });

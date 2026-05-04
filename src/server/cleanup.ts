@@ -46,8 +46,12 @@ export class CleanupScheduler {
         const now = Date.now();
         if (this.cleanup.messageAfterDays && this.cleanup.messageAfterDays > 0) {
             const handler = getHandler(this.ctx.handlers, "deleteMessagesBefore");
-            try { await handler(new Date(now - this.cleanup.messageAfterDays * ONE_DAY_MS)); }
-            catch (error) { logError("deleteMessagesBefore", error); }
+            const threshold = new Date(now - this.cleanup.messageAfterDays * ONE_DAY_MS);
+            try {
+                await handler(threshold);
+                // Invalidate cache for conversations whose last message was deleted through cleanup (older than threshold)
+                this.ctx.conversationCache.invalidateMatching(c => c.lastMessage !== null && c.lastMessage.createdAt < threshold);
+            } catch (error) { logError("deleteMessagesBefore", error); }
         }
         if (this.cleanup.conversationAfterInactiveDays && this.cleanup.conversationAfterInactiveDays > 0) {
             const handler = getHandler(this.ctx.handlers, "deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore");

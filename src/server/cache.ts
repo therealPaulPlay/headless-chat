@@ -22,4 +22,11 @@ export class Cache<T> {
         }
         return undefined;
     }
+
+    // Invalidates every entry whose stored value matches the predicate
+    invalidateMatching(predicate: (value: T) => boolean): void {
+        for (const [key, value] of this.store) {
+            if (predicate(structuredClone(value))) this.store.delete(key);
+        }
+    }
 }

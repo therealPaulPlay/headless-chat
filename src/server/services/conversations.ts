@@ -47,8 +47,13 @@ export async function createConversation(ctx: ServerContext, participantId: stri
 }
 
 export async function createInvite(ctx: ServerContext, fromParticipantId: string, conversationId: string, toParticipantId: string): Promise<ServiceResult<void>> {
-    if (fromParticipantId === toParticipantId) throw new Error("Cannot invite yourself");
     ctx.rateLimiter.trackInvite(fromParticipantId);
+    return createInviteAdmin(ctx, fromParticipantId, conversationId, toParticipantId);
+}
+
+// Admin-friendly variant, no rate limit
+export async function createInviteAdmin(ctx: ServerContext, fromParticipantId: string, conversationId: string, toParticipantId: string): Promise<ServiceResult<void>> {
+    if (fromParticipantId === toParticipantId) throw new Error("Cannot invite yourself");
 
     const conversation = await readConversationCached(ctx, conversationId);
     if (!conversation) throw new Error("Conversation not found");
@@ -72,7 +77,7 @@ export async function createInvite(ctx: ServerContext, fromParticipantId: string
         conversation,
         createdAt: now(),
     };
-    // Handler dedupes on (conversationId, toParticipantId), throws if recipient is already a participant
+    // Handler dedupes on the triple, throws if recipient is already a participant
     await getHandler(ctx.handlers, "createInvite")(invite);
     ctx.subscriptions.emit(ctx.subscriptions.prepareInvite(invite));
     return { result: undefined, hooks: [() => fireHook(ctx.handlers, "afterInviteCreated", invite)] };

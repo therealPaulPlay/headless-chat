@@ -218,7 +218,7 @@ export class Server {
     }
 
     createInvite(conversationId: string, fromParticipantId: string, toParticipantId: string): Promise<void> {
-        return this.runAdmin(conversationsService.createInvite(this.ctx, fromParticipantId, conversationId, toParticipantId));
+        return this.runAdmin(conversationsService.createInviteAdmin(this.ctx, fromParticipantId, conversationId, toParticipantId));
     }
 
     deleteParticipant(participantId: string): Promise<void> {
