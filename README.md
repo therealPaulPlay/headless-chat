@@ -277,7 +277,7 @@ ConversationRecord & {
 ```ts
 {
     type: "participantJoined" | "participantLeft" | "messagesRemoved",
-    participantId?: string, // The participant the event is about (e.g. who joined / left), omitted for events not scoped to a single participant (e.g. "messagesRemoved")
+    participantId?: string, // Who the participant the event is about (e.g. who joined / left), omitted for events not scoped to a single participant (e.g. "messagesRemoved")
 }
 ```
 
