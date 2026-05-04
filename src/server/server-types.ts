@@ -80,7 +80,7 @@ export type Handlers = {
     deleteReaction?: Handler<[string], void>,
     deleteConversationWithMessagesReactionsInvitesAndActivities?: Handler<[string], { deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }>,
     deleteInvites?: Handler<[{ conversationId: string, fromParticipantId: string, toParticipantId: string }[]], void>,
-    deleteMessagesBefore?: Handler<[Date], void>,
+    deleteMessagesBefore?: Handler<[Date], { affectedConversationIds: string[] }>, // (thresholdDate), return the conversationIds that had at least one message deleted
     deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore?: Handler<[Date], { deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] }>,
     deleteInvitesBefore?: Handler<[Date], { deletedInvites: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] }>,
 

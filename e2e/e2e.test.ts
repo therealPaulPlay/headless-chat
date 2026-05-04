@@ -1481,7 +1481,7 @@ describe("cleanup broadcasts", () => {
         }
     });
 
-    test("daily messageAfterDays cleanup deletes old messages and invalidates cached conversations whose lastMessage was deleted", async () => {
+    test("daily messageAfterDays cleanup deletes old messages, posts a messagesRemoved marker, and keeps cache in sync with DB", async () => {
         const transport = new FakeTransport(undefined, { messageAfterDays: 1 });
         try {
             const alice = transport.addClient("alice");
@@ -1494,16 +1494,154 @@ describe("cleanup broadcasts", () => {
             const cached = transport.conversationCache.get(conversationId)!;
             cached.lastMessage!.createdAt = backdated;
             transport.conversationCache.set(conversationId, cached);
+            const lastActivityBefore = transport.store.conversations.get(conversationId)!.lastActivityAt.getTime();
 
             await runDaily(transport);
 
             expect(transport.store.messages.has(oldMessageId)).toBe(false);
-            // Cache entry got invalidated by the cleanup since its lastMessage was older than the threshold
-            expect(transport.conversationCache.get(conversationId)).toBeUndefined();
-            // After a fresh read, the conversation has no lastMessage and cache + DB agree
-            const fresh = (await alice.getConversations("alice")).find(c => c.conversationId === conversationId);
-            expect(fresh?.lastMessage).toBeNull();
+
+            // The conversation now contains exactly one message: the messagesRemoved marker authored by "server"
+            const remaining = [...transport.store.messages.values()].filter(m => m.conversationId === conversationId);
+            expect(remaining).toHaveLength(1);
+            expect(remaining[0]?.systemEvent?.type).toBe("messagesRemoved");
+            expect(remaining[0]?.participantId).toBe("server");
+
+            // lastActivityAt must not have been pulled forward by the backdated marker
+            const lastActivityAfter = transport.store.conversations.get(conversationId)!.lastActivityAt.getTime();
+            expect(lastActivityAfter).toBe(lastActivityBefore);
+
+            // Cache and DB still agree after the cleanup + marker post
             expect(transport.store.cachedConversationMatchesDb(conversationId, transport.conversationCache.get(conversationId))).toBe(true);
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("daily messageAfterDays cleanup does not stack markers on consecutive runs", async () => {
+        const transport = new FakeTransport(undefined, { messageAfterDays: 1 });
+        try {
+            const alice = transport.addClient("alice");
+            const conversationId = await alice.createConversation();
+            const oldMessageId = await alice.sendMessage(conversationId, "old");
+
+            // Age the message so the first cleanup run will delete it and post a marker
+            const backdated = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+            transport.store.messages.get(oldMessageId)!.createdAt = backdated;
+
+            await runDaily(transport);
+            const afterFirstRun = [...transport.store.messages.values()].filter(m => m.conversationId === conversationId).length;
+            expect(afterFirstRun).toBe(1);
+
+            // Second run with no new activity, the existing marker is still recent enough not to be deleted, and the dedup check should skip posting another one
+            await runDaily(transport);
+            const afterSecondRun = [...transport.store.messages.values()].filter(m => m.conversationId === conversationId).length;
+            expect(afterSecondRun).toBe(1);
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("daily messageAfterDays cleanup with mixed message ages: only the expired ones get deleted, surviving messages stay, marker is the oldest, cache's lastMessage stays anchored to the newest real message, and the marker is persisted but not broadcast", async () => {
+        const transport = new FakeTransport(undefined, { messageAfterDays: 1 });
+        try {
+            const alice = transport.addClient("alice");
+            const bob = transport.addClient("bob");
+            const conversationId = await alice.createConversation();
+            await alice.createInvite(conversationId, "bob");
+            await bob.acceptInvite(conversationId);
+
+            // Two old messages that should age out + two recent ones that survive
+            const oldA = await alice.sendMessage(conversationId, "old A");
+            const oldB = await bob.sendMessage(conversationId, "old B");
+            const recentA = await alice.sendMessage(conversationId, "recent A");
+            const recentB = await bob.sendMessage(conversationId, "recent B");
+
+            const backdated = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+            transport.store.messages.get(oldA)!.createdAt = backdated;
+            transport.store.messages.get(oldB)!.createdAt = backdated;
+
+            // Bob subscribes so we can verify the marker is NOT pushed to live subscribers (the older messages are already in the client's view, the marker only matters on next refresh)
+            const liveMessages: Message[] = [];
+            const liveConversations: { conversationId: string, data: Conversation | null }[] = [];
+            await bob.onMessage(conversationId, m => liveMessages.push(m));
+            await bob.onConversation(e => liveConversations.push(e));
+
+            await runDaily(transport);
+            await tick();
+
+            // Old ones gone, recent ones survive, plus exactly one marker
+            expect(transport.store.messages.has(oldA)).toBe(false);
+            expect(transport.store.messages.has(oldB)).toBe(false);
+            expect(transport.store.messages.has(recentA)).toBe(true);
+            expect(transport.store.messages.has(recentB)).toBe(true);
+
+            const conversationMessages = [...transport.store.messages.values()].filter(m => m.conversationId === conversationId);
+            const markers = conversationMessages.filter(m => m.systemEvent?.type === "messagesRemoved");
+            expect(markers).toHaveLength(1);
+            // recentA + recentB + the participantJoined system message from bob's accept + the new marker
+            expect(conversationMessages).toHaveLength(4);
+
+            // The marker sorts as the oldest message, so it shows up at the top of message history
+            const sortedAsc = [...conversationMessages].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+            expect(sortedAsc[0]?.messageId).toBe(markers[0]?.messageId);
+
+            // The cache's lastMessage is still recentB (the newest real message), not the backdated marker
+            const cached = transport.conversationCache.get(conversationId);
+            expect(cached?.lastMessage?.messageId).toBe(recentB);
+            expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+
+            // No message-scope or conversation-scope event was fired for the marker
+            expect(liveMessages.find(m => m.messageId === markers[0]?.messageId)).toBeUndefined();
+            expect(liveConversations.find(e => e.data?.lastMessage?.messageId === markers[0]?.messageId)).toBeUndefined();
+
+            // But the marker IS reachable via getMessages (next refresh path)
+            const fetched = await bob.getMessages(conversationId, null, false, 10);
+            expect(fetched.messages.some(m => m.messageId === markers[0]?.messageId)).toBe(true);
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("daily messageAfterDays cleanup rolls the marker forward: an old marker that itself ages out gets deleted and a fresh one takes its place", async () => {
+        const transport = new FakeTransport(undefined, { messageAfterDays: 1 });
+        try {
+            const alice = transport.addClient("alice");
+            const conversationId = await alice.createConversation();
+
+            // First-run setup: an old user message + an existing marker that itself is older than the threshold (e.g. left over from many days ago)
+            const oldUserMsgId = await alice.sendMessage(conversationId, "older user message");
+            const veryOld = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+            transport.store.messages.get(oldUserMsgId)!.createdAt = veryOld;
+
+            // Pre-existing stale marker, also expired
+            const staleMarkerId = "stale-marker";
+            transport.store.messages.set(staleMarkerId, {
+                messageId: staleMarkerId,
+                conversationId,
+                message: "",
+                messageOptions: { referenceMessageId: null, isForwarded: false },
+                participantId: "server",
+                reactions: [],
+                deleted: false,
+                systemEvent: { type: "messagesRemoved" },
+                createdAt: veryOld,
+                modifiedAt: null,
+            });
+
+            // Add a fresh message that should survive
+            const freshId = await alice.sendMessage(conversationId, "fresh");
+
+            await runDaily(transport);
+
+            // Old user message and stale marker both got deleted, fresh message survives
+            expect(transport.store.messages.has(oldUserMsgId)).toBe(false);
+            expect(transport.store.messages.has(staleMarkerId)).toBe(false);
+            expect(transport.store.messages.has(freshId)).toBe(true);
+
+            // Exactly one fresh marker now exists in the conversation
+            const markers = [...transport.store.messages.values()].filter(m => m.conversationId === conversationId && m.systemEvent?.type === "messagesRemoved");
+            expect(markers).toHaveLength(1);
+            expect(markers[0]?.messageId).not.toBe(staleMarkerId);
         } finally {
             transport.stop();
         }

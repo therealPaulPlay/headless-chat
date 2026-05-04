@@ -110,7 +110,7 @@ export class Server {
     onDeleteReaction(handler: Handler<[string], void>) { this.handlers.deleteReaction = handler; }
     onDeleteConversationWithMessagesReactionsInvitesAndActivities(handler: Handler<[string], { deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }>) { this.handlers.deleteConversationWithMessagesReactionsInvitesAndActivities = handler; }
     onDeleteInvites(handler: Handler<[{ conversationId: string, fromParticipantId: string, toParticipantId: string }[]], void>) { this.handlers.deleteInvites = handler; }
-    onDeleteMessagesBefore(handler: Handler<[Date], void>) { this.handlers.deleteMessagesBefore = handler; }
+    onDeleteMessagesBefore(handler: Handler<[Date], { affectedConversationIds: string[] }>) { this.handlers.deleteMessagesBefore = handler; }
     onDeleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore(handler: Handler<[Date], { deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] }>) { this.handlers.deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore = handler; }
     onDeleteInvitesBefore(handler: Handler<[Date], { deletedInvites: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] }>) { this.handlers.deleteInvitesBefore = handler; }
 

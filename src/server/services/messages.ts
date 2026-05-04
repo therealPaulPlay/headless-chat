@@ -26,14 +26,17 @@ async function persistAndPrepareMessage(ctx: ServerContext, message: Message): P
     }
 
     // Patch the in-flight snapshot rather than re-reading - the only fields that change are lastMessage and lastActivityAt
-    conversation.lastMessage = message;
-    conversation.lastActivityAt = message.createdAt;
+    // Never regress lastMessage and lastActivityAt, prepended system messages must not pull it backwards
+    if (message.createdAt.getTime() >= conversation.lastActivityAt.getTime()) {
+        conversation.lastMessage = message;
+        conversation.lastActivityAt = message.createdAt;
+    }
     ctx.conversationCache.set(message.conversationId, conversation);
 
     return [ctx.subscriptions.prepareMessage(message), ctx.subscriptions.prepareConversation(conversation)];
 }
 
-function buildMessage(participantId: string, conversationId: string, text: string, options: MessageOptions | undefined, systemEvent: SystemEvent | null): Message {
+function buildMessage(participantId: string, conversationId: string, text: string, options: MessageOptions | undefined, systemEvent: SystemEvent | null, createdAt?: Date): Message {
     return {
         messageId: newId(),
         conversationId,
@@ -43,7 +46,7 @@ function buildMessage(participantId: string, conversationId: string, text: strin
         reactions: [],
         deleted: false,
         systemEvent,
-        createdAt: now(),
+        createdAt: createdAt ?? now(),
         modifiedAt: null,
     };
 }
@@ -164,8 +167,9 @@ export async function removeReaction(ctx: ServerContext, participantId: string, 
 }
 
 // Server-side path, bypasses rate limit + profanity check, returns events for the caller to bundle or emit
-export async function internalSendMessage(ctx: ServerContext, conversationId: string, participantId: string, text: string, options?: MessageOptions, systemEvent?: SystemEvent): Promise<ServiceResult<string> & { events: PreparedEvent[][] }> {
-    const message = buildMessage(participantId, conversationId, text, options, systemEvent ?? null);
+// createdAt override is for backdated system messages
+export async function internalSendMessage(ctx: ServerContext, conversationId: string, participantId: string, text: string, options?: MessageOptions, systemEvent?: SystemEvent, createdAt?: Date): Promise<ServiceResult<string> & { events: PreparedEvent[][] }> {
+    const message = buildMessage(participantId, conversationId, text, options, systemEvent ?? null, createdAt);
     const events = await persistAndPrepareMessage(ctx, message);
     return { result: message.messageId, hooks: [() => fireHook(ctx.handlers, "afterMessageCreated", message)], events };
 }

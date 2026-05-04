@@ -1,6 +1,7 @@
 import { type ResolvedCleanup, getHandler } from "./server-types.js";
 import { type ServerContext, fireHook } from "./context.js";
 import { emitConversationDeleted } from "./services/conversations.js";
+import { internalSendMessage } from "./services/messages.js";
 import { logError } from "../shared/log.js";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -60,9 +61,23 @@ export class CleanupScheduler {
             const handler = getHandler(this.ctx.handlers, "deleteMessagesBefore");
             const threshold = new Date(now - this.cleanup.messageAfterDays * ONE_DAY_MS);
             try {
-                await handler(threshold);
-                // Invalidate cache for conversations whose last message was deleted through cleanup (older than threshold)
+                const { affectedConversationIds } = await handler(threshold);
+                // Invalidate cache for conversations whose last message was deleted (now stale)
                 this.ctx.conversationCache.invalidateMatching(c => c.lastMessage !== null && c.lastMessage.createdAt < threshold);
+
+                // Post a "messagesRemoved" marker per affected conversation so the UI can show that older messages used to exist
+                // createdAt = threshold - 1ms guarantees the marker sorts strictly before any surviving message (which all have createdAt >= threshold) and never bumps lastActivityAt
+                // Persisted but not broadcast, a live client viewing the conversation already has the older messages loaded in memory and the marker only matters on the next page refresh
+                const markerCreatedAt = new Date(threshold.getTime() - 1);
+                for (const conversationId of affectedConversationIds) {
+                    try {
+                        // Dedup, an earlier run's marker would have createdAt < this run's threshold and thus already got deleted above, so the only stacking risk is within the same run when nothing else survived
+                        const newest = await getHandler(this.ctx.handlers, "readMessages")(conversationId, null, false, 1);
+                        if (newest.messages.length === 1 && newest.messages[0]?.systemEvent?.type === "messagesRemoved") continue;
+                        const sysMsg = await internalSendMessage(this.ctx, conversationId, "server", "", { referenceMessageId: null, isForwarded: false }, { type: "messagesRemoved" }, markerCreatedAt);
+                        for (const hook of sysMsg.hooks) await hook();
+                    } catch (error) { logError("messagesRemoved system message", error); }
+                }
             } catch (error) { logError("deleteMessagesBefore", error); }
         }
         if (this.cleanup.conversationAfterInactiveDays && this.cleanup.conversationAfterInactiveDays > 0) {

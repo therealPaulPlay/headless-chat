@@ -29,8 +29,8 @@ export type MessageOptions = {
 }
 
 export type SystemEvent = {
-    type: "participantJoined" | "participantLeft",
-    participantId: string,
+    type: "participantJoined" | "participantLeft" | "messagesRemoved",
+    participantId?: string, // The participant the event is about (only present if it is about one, e.g. who joined / left)
 }
 
 export type Indicator = {

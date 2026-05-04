@@ -94,9 +94,9 @@ export class InMemoryStore {
                 throw new Error("Not a participant of this conversation");
             }
             this.messages.set(message.messageId, { ...message, reactions: [] });
-            // Mirror the consumer's transaction, the conversation's lastActivityAt tracks the latest message
+            // Mirror the consumer's transaction, lastActivityAt tracks the latest message but never regresses (backdated system messages must not pull it backwards)
             const conversation = this.conversations.get(message.conversationId);
-            if (conversation) conversation.lastActivityAt = message.createdAt;
+            if (conversation && message.createdAt.getTime() >= conversation.lastActivityAt.getTime()) conversation.lastActivityAt = message.createdAt;
         });
         server.onCreateReaction(reaction => {
             this.bump("createReaction");
@@ -312,7 +312,14 @@ export class InMemoryStore {
         });
         server.onDeleteMessagesBefore(thresholdDate => {
             this.bump("deleteMessagesBefore");
-            for (const [id, m] of this.messages) if (m.createdAt.getTime() < thresholdDate.getTime()) this.messages.delete(id);
+            const affected = new Set<string>();
+            for (const [id, m] of this.messages) {
+                if (m.createdAt.getTime() < thresholdDate.getTime()) {
+                    affected.add(m.conversationId);
+                    this.messages.delete(id);
+                }
+            }
+            return { affectedConversationIds: [...affected] };
         });
         server.onDeleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore(thresholdDate => {
             this.bump("deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore");
