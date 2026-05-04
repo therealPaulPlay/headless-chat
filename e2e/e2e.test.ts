@@ -1460,6 +1460,41 @@ describe("client dispose", () => {
         blackHole.dispose();
         await expect(wedged).rejects.toThrow(/disposed/i);
     });
+
+    test("dispose unsubscribes the server from all active scopes so events stop being pushed even when the transport stays open", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Bob subscribes broadly so dispose has multiple scopes to unsubscribe from
+        const messages: Message[] = [];
+        const conversations: { conversationId: string, data: Conversation | null }[] = [];
+        const indicators: Indicator[][] = [];
+        await bob.onMessage(conversationId, m => messages.push(m));
+        await bob.onConversation(e => conversations.push(e));
+        await bob.onIndicators(conversationId, i => indicators.push(i));
+
+        // Sanity: the subscriptions are live, alice typing reaches bob
+        await alice.setIndicator(conversationId);
+        await tick();
+        expect(indicators.length).toBeGreaterThan(0);
+
+        const beforeDisposeCounts = { messages: messages.length, conversations: conversations.length, indicators: indicators.length };
+
+        bob.dispose();
+        await tick();
+
+        // After dispose, alice's actions still fire on the server but bob's transport receives nothing for those scopes
+        await alice.sendMessage(conversationId, "should not reach disposed bob");
+        await alice.setIndicator(conversationId);
+        await tick();
+
+        expect(messages.length).toBe(beforeDisposeCounts.messages);
+        expect(conversations.length).toBe(beforeDisposeCounts.conversations);
+        expect(indicators.length).toBe(beforeDisposeCounts.indicators);
+    });
 });
 
 describe("getMessages cursor semantics", () => {

@@ -28,10 +28,16 @@ export class Client {
         this.getAuthData = getAuthData;
     }
 
-    // Reject in-flight RPCs and clear handler tracking, call when discarding the instance
+    // Reject in-flight RPCs, unsubscribe the server from all scopes, and clear handler tracking. Call when discarding the instance
     dispose(): void {
         for (const { reject } of this.pending.values()) reject(new Error("Client disposed"));
         this.pending.clear();
+
+        // Tell the server to stop pushing for every scope still subscribed locally, the consumer may keep the transport alive (eg. just swapping client instances) so we can't rely on disconnect-driven cleanupParticipant
+        // Best-effort only, if the transport is already torn down the dispatch failure is swallowed, since dispose itself shouldn't throw
+        for (const scope of this.scopeHandlers.keys()) {
+            this.sendEnvelope({ type: "unsubscribe", scope }).catch(() => { });
+        }
         this.scopeHandlers.clear();
         this.handlerScope.clear();
     }

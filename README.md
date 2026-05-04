@@ -40,7 +40,7 @@ A function that takes no parameters and returns `authData: unknown` that is sent
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
 | receive(data: unknown) | - | Call with the decoded object received from the server. |
-| dispose() | - | Reject all in-flight RPC promises and clear local handler state. Call when discarding the instance (e.g. on account switch) so awaiting code doesn't hang. |
+| dispose() | - | Reject all in-flight RPC promises, unsubscribe the server from every active scope (if still connected, otherwise cleanupParticipant needs to be called on the server), and clear local handler state. Call when discarding the instance. |
 
 **Conversations:**
 | Method | Returns | Description |
