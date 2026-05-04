@@ -1,7 +1,7 @@
 import { type ResolvedCleanup, getHandler } from "./server-types.js";
 import { type ServerContext, fireHook } from "./context.js";
 import { emitConversationDeleted } from "./services/conversations.js";
-import { internalSendMessage } from "./services/messages.js";
+import { buildMessage } from "./services/messages.js";
 import { logError } from "../shared/log.js";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -62,21 +62,37 @@ export class CleanupScheduler {
             const threshold = new Date(now - this.cleanup.messageAfterDays * ONE_DAY_MS);
             try {
                 const { affectedConversationIds } = await handler(threshold);
-                // Invalidate cache for conversations whose last message was deleted (now stale)
-                this.ctx.conversationCache.invalidateMatching(c => c.lastMessage !== null && c.lastMessage.createdAt < threshold);
 
-                // Post a "messagesRemoved" marker per affected conversation so the UI can show that older messages used to exist
-                // createdAt = threshold - 1ms guarantees the marker sorts strictly before any surviving message (which all have createdAt >= threshold) and never bumps lastActivityAt
-                // Persisted but not broadcast, a live client viewing the conversation already has the older messages loaded in memory and the marker only matters on the next page refresh
-                const markerCreatedAt = new Date(threshold.getTime() - 1);
-                for (const conversationId of affectedConversationIds) {
+                // Post a "messagesRemoved" system message per affected conversation, backdated so it sorts before any surviving message and never bumps lastActivityAt
+                // Not broadcast, live clients still hold the older messages in memory until they refresh
+                if (affectedConversationIds.length > 0) {
+                    const sysMsgCreatedAt = new Date(threshold.getTime() - 1);
+                    const sysMsgs = affectedConversationIds.map(conversationId =>
+                        buildMessage("server", conversationId, "", undefined, { type: "messagesRemoved" }, sysMsgCreatedAt),
+                    );
                     try {
-                        // Dedup, an earlier run's marker would have createdAt < this run's threshold and thus already got deleted above, so the only stacking risk is within the same run when nothing else survived
-                        const newest = await getHandler(this.ctx.handlers, "readMessages")(conversationId, null, false, 1);
-                        if (newest.messages.length === 1 && newest.messages[0]?.systemEvent?.type === "messagesRemoved") continue;
-                        const sysMsg = await internalSendMessage(this.ctx, conversationId, "server", "", { referenceMessageId: null, isForwarded: false }, { type: "messagesRemoved" }, markerCreatedAt);
-                        for (const hook of sysMsg.hooks) await hook();
-                    } catch (error) { logError("messagesRemoved system message", error); }
+                        // Handler dedups per conversation and returns the resulting oldest system message for each (just-inserted or pre-existing)
+                        const { oldestMessagesByConversationId } = await getHandler(this.ctx.handlers, "createMessagesSystemRemoved")(sysMsgs);
+
+                        // Patch caches before firing hooks so hooks reading through the cache see post-cleanup state
+                        for (const [conversationId, oldest] of oldestMessagesByConversationId) {
+                            const cached = this.ctx.conversationCache.get(conversationId);
+                            // Cached lastMessage was deleted by this run, which means no newer message survived (otherwise the cache would have held that one), so the returned oldest is the new lastMessage
+                            if (cached?.lastMessage && cached.lastMessage.createdAt < threshold) {
+                                this.ctx.conversationCache.set(conversationId, { ...cached, lastMessage: oldest });
+                            }
+                        }
+
+                        // Fire afterMessageCreated only for sysMsgs we actually inserted (matched by messageId against the ones we built locally)
+                        const ourSysMsgIds = new Set(sysMsgs.map(m => m.messageId));
+                        for (const oldest of oldestMessagesByConversationId.values()) {
+                            if (ourSysMsgIds.has(oldest.messageId)) fireHook(this.ctx.handlers, "afterMessageCreated", oldest);
+                        }
+                    } catch (error) {
+                        // Insert failure leaves the DB in an unknown state, invalidate stale entries so next read repopulates
+                        this.ctx.conversationCache.invalidateMatching(c => c.lastMessage !== null && c.lastMessage.createdAt < threshold);
+                        logError("createMessagesSystemRemoved", error);
+                    }
                 }
             } catch (error) { logError("deleteMessagesBefore", error); }
         }

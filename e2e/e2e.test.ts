@@ -1646,6 +1646,55 @@ describe("cleanup broadcasts", () => {
             transport.stop();
         }
     });
+
+    test("daily messageAfterDays cleanup keeps cache consistent with DB when handler-side dedup skips the marker insert", async () => {
+        const transport = new FakeTransport(undefined, { messageAfterDays: 1 });
+        try {
+            const alice = transport.addClient("alice");
+            const conversationId = await alice.createConversation();
+
+            // A pre-existing marker that survives this run (createdAt within the retention window)
+            const survivingMarkerId = "surviving-marker";
+            const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+            transport.store.messages.set(survivingMarkerId, {
+                messageId: survivingMarkerId,
+                conversationId,
+                message: "",
+                messageOptions: { referenceMessageId: null, isForwarded: false },
+                participantId: "server",
+                reactions: [],
+                deleted: false,
+                systemEvent: { type: "messagesRemoved" },
+                createdAt: oneHourAgo,
+                modifiedAt: null,
+            });
+
+            // A user message that the cache holds as lastMessage, then backdate it past the threshold so it expires
+            const oldUserMsgId = await alice.sendMessage(conversationId, "old user message");
+            const backdated = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+            transport.store.messages.get(oldUserMsgId)!.createdAt = backdated;
+            const cached = transport.conversationCache.get(conversationId)!;
+            cached.lastMessage!.createdAt = backdated;
+            transport.conversationCache.set(conversationId, cached);
+
+            await runDaily(transport);
+
+            // The expired user message is gone, the surviving marker is still the only message in the conversation, and no new marker was inserted (handler-side dedup)
+            expect(transport.store.messages.has(oldUserMsgId)).toBe(false);
+            const remaining = [...transport.store.messages.values()].filter(m => m.conversationId === conversationId);
+            expect(remaining).toHaveLength(1);
+            expect(remaining[0]?.messageId).toBe(survivingMarkerId);
+
+            // The cached lastMessage must point at a row that actually exists in the DB, not a phantom system message that the handler dedup-skipped
+            const cachedAfter = transport.conversationCache.get(conversationId);
+            if (cachedAfter?.lastMessage) {
+                expect(transport.store.messages.has(cachedAfter.lastMessage.messageId)).toBe(true);
+            }
+            expect(transport.store.cachedConversationMatchesDb(conversationId, cachedAfter)).toBe(true);
+        } finally {
+            transport.stop();
+        }
+    });
 });
 
 describe("client dispose", () => {
@@ -2154,5 +2203,96 @@ describe("database call counts sanity checks", () => {
 
         const totalDbCalls = [...transport.store.callCounts.values()].reduce((a, b) => a + b, 0);
         expect(totalDbCalls).toBeLessThanOrEqual(41);
+    });
+
+    test("daily messageAfterDays cleanup makes a constant number of DB calls regardless of how many conversations have expiring messages", async () => {
+        const tight = new FakeTransport({ messageLimitPerSecond: 1000 }, { messageAfterDays: 1 });
+        try {
+            // Build up many conversations (just over the threshold of "many") and put one expiring message in each so they all qualify for the marker post
+            const N = 50;
+            const owner = tight.addClient("owner");
+            const ids: string[] = [];
+            for (let i = 0; i < N; i++) {
+                const id = await owner.createConversation();
+                const messageId = await owner.sendMessage(id, `m${i}`);
+                tight.store.messages.get(messageId)!.createdAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+                ids.push(id);
+            }
+
+            // Reset counts so we measure only the cleanup work
+            tight.store.resetCounts();
+            await (tight.server as unknown as { scheduler: { runDaily: () => Promise<void> } }).scheduler.runDaily();
+            await tick();
+
+            // Sanity: every conversation has its old message gone and exactly one marker
+            for (const id of ids) {
+                const remaining = [...tight.store.messages.values()].filter(m => m.conversationId === id);
+                expect(remaining).toHaveLength(1);
+                expect(remaining[0]?.systemEvent?.type).toBe("messagesRemoved");
+            }
+
+            // Cost guardrail: total DB calls must NOT scale with N, exactly 2 (deleteMessagesBefore + bulk-insert system messages with dedup baked in)
+            const totalDbCalls = [...tight.store.callCounts.values()].reduce((a, b) => a + b, 0);
+            expect(totalDbCalls).toBe(2);
+        } finally {
+            tight.stop();
+        }
+    });
+
+    test("daily conversationAfterInactiveDays cleanup makes a constant number of DB calls regardless of how many conversations are deleted", async () => {
+        const tight = new FakeTransport(undefined, { conversationAfterInactiveDays: 1 });
+        try {
+            const N = 50;
+            const owner = tight.addClient("owner");
+            const ids: string[] = [];
+            for (let i = 0; i < N; i++) {
+                const id = await owner.createConversation();
+                tight.store.conversations.get(id)!.lastActivityAt = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+                ids.push(id);
+            }
+
+            tight.store.resetCounts();
+            await (tight.server as unknown as { scheduler: { runDaily: () => Promise<void> } }).scheduler.runDaily();
+            await tick();
+
+            // Sanity: all of them are gone
+            for (const id of ids) expect(tight.store.conversations.has(id)).toBe(false);
+
+            // Cost guardrail: one bulk handler call covers all of them
+            const totalDbCalls = [...tight.store.callCounts.values()].reduce((a, b) => a + b, 0);
+            expect(totalDbCalls).toBeLessThanOrEqual(2);
+        } finally {
+            tight.stop();
+        }
+    });
+
+    test("daily inviteAfterDays cleanup makes a constant number of DB calls regardless of how many invites expire", async () => {
+        const tight = new FakeTransport({ inviteLimitPerHour: 10000 }, { inviteAfterDays: 1 });
+        try {
+            const N = 50;
+            const sender = tight.addClient("sender");
+            // Create N conversations so each can hold one outgoing invite
+            for (let i = 0; i < N; i++) {
+                tight.addClient(`recipient${i}`);
+                const id = await sender.createConversation();
+                await sender.createInvite(id, `recipient${i}`);
+            }
+            // Backdate every invite so they all expire
+            const expired = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+            for (const invite of tight.store.invites) invite.createdAt = expired;
+
+            tight.store.resetCounts();
+            await (tight.server as unknown as { scheduler: { runDaily: () => Promise<void> } }).scheduler.runDaily();
+            await tick();
+
+            // Sanity: all invites gone
+            expect(tight.store.invites).toHaveLength(0);
+
+            // Cost guardrail: one bulk handler call covers all of them
+            const totalDbCalls = [...tight.store.callCounts.values()].reduce((a, b) => a + b, 0);
+            expect(totalDbCalls).toBeLessThanOrEqual(2);
+        } finally {
+            tight.stop();
+        }
     });
 });

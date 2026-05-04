@@ -36,7 +36,7 @@ async function persistAndPrepareMessage(ctx: ServerContext, message: Message): P
     return [ctx.subscriptions.prepareMessage(message), ctx.subscriptions.prepareConversation(conversation)];
 }
 
-function buildMessage(participantId: string, conversationId: string, text: string, options: MessageOptions | undefined, systemEvent: SystemEvent | null, createdAt?: Date): Message {
+export function buildMessage(participantId: string, conversationId: string, text: string, options: MessageOptions | undefined, systemEvent: SystemEvent | null, createdAt?: Date): Message {
     return {
         messageId: newId(),
         conversationId,

@@ -98,6 +98,25 @@ export class InMemoryStore {
             const conversation = this.conversations.get(message.conversationId);
             if (conversation && message.createdAt.getTime() >= conversation.lastActivityAt.getTime()) conversation.lastActivityAt = message.createdAt;
         });
+        server.onCreateMessagesSystemRemoved(messages => {
+            this.bump("createMessagesSystemRemoved");
+            // Contract: the lib always calls this with at least one message, fail loud on regressions
+            if (messages.length === 0) throw new Error("createMessagesSystemRemoved called with empty input");
+            // Per-conversation dedup, skip the insert if the current oldest message is already a "messagesRemoved" system message. Either way return the resulting oldest message for that conversation
+            const oldestMessagesByConversationId = new Map<string, Message>();
+            for (const message of messages) {
+                const inConversation = [...this.messages.values()].filter(m => m.conversationId === message.conversationId);
+                const oldest = inConversation.reduce<typeof inConversation[number] | null>((acc, m) => !acc || m.createdAt.getTime() < acc.createdAt.getTime() ? m : acc, null);
+                if (oldest?.systemEvent?.type === "messagesRemoved") {
+                    oldestMessagesByConversationId.set(message.conversationId, { ...oldest });
+                    continue;
+                }
+                this.messages.set(message.messageId, { ...message, reactions: [] });
+                oldestMessagesByConversationId.set(message.conversationId, { ...message, reactions: [] });
+                // No lastActivityAt bump, the system message is backdated and lastActivityAt should reflect the most recent real activity
+            }
+            return { oldestMessagesByConversationId };
+        });
         server.onCreateReaction(reaction => {
             this.bump("createReaction");
             const message = this.messages.get(reaction.messageId);

@@ -51,6 +51,7 @@ export type Handler<Args extends unknown[], R> = (...args: Args) => R | Promise<
 export type Handlers = {
     createConversation?: Handler<[ConversationRecord, string, number], void>, // (record, creatorParticipantId, maxConversationsPerParticipant), throw if creator is at the cap
     createMessage?: Handler<[Message], void>,
+    createMessagesSystemRemoved?: Handler<[Message[]], { oldestMessagesByConversationId: Map<string, Message> }>, // Bulk-insert "messagesRemoved" system messages, dedup per-conversation against the current oldest, return each conversation's resulting oldest (just-inserted or pre-existing), always called with at least one message
     createReaction?: Handler<[Reaction], void>,
     createInvite?: Handler<[Invite], void>,
     createConversationParticipantActivity?: Handler<[ParticipantActivity], void>,
