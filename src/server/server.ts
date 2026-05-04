@@ -100,6 +100,10 @@ export class Server {
 
     onAddConversationParticipant(handler: Handler<[string, string, number, number], void>) { this.handlers.addConversationParticipant = handler; }
     onRemoveConversationParticipantAndDeleteParticipantActivity(handler: Handler<[string, string], void>) { this.handlers.removeConversationParticipantAndDeleteParticipantActivity = handler; }
+    onLeaveAllConversationsForParticipantAndDeleteParticipantActivities(handler: Handler<[string], {
+        deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[],
+        remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipants: string[], lastMessage: Message | null }[],
+    }>) { this.handlers.leaveAllConversationsForParticipantAndDeleteParticipantActivities = handler; }
     onUpdateMessage(handler: Handler<[Message], void>) { this.handlers.updateMessage = handler; }
     onUpdateConversationParticipantActivity(handler: Handler<[ParticipantActivity], void>) { this.handlers.updateConversationParticipantActivity = handler; }
 

@@ -178,11 +178,4 @@ export class Subscriptions {
         }];
     }
 
-    // Used when only a messageId is on hand (reactions), reads the message then prepares + emits
-    async emitMessageById(messageId: string): Promise<void> {
-        try {
-            const message = await getHandler(this.handlers, "readMessage")(messageId);
-            if (message) this.emit(this.prepareMessage(message));
-        } catch (error) { logError("readMessage", error); }
-    }
 }

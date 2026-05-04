@@ -69,7 +69,11 @@ export type Handlers = {
     readReaction?: Handler<[string], Reaction | null>,
 
     addConversationParticipant?: Handler<[string, string, number, number], void>, // (conversationId, participantId, maxParticipants, maxConversationsPerParticipant), throw if either cap exceeded
-    removeConversationParticipantAndDeleteParticipantActivity?: Handler<[string, string], void>, // (conversationId, participantId) - atomically remove the participant from the conversation and delete their participant activity row
+    removeConversationParticipantAndDeleteParticipantActivity?: Handler<[string, string], void>, // (conversationId, participantId), atomically remove the participant from the conversation and delete their participant activity row
+    leaveAllConversationsForParticipantAndDeleteParticipantActivities?: Handler<[string], {
+        deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[],
+        remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipants: string[], lastMessage: Message | null }[],
+    }>, // (participantId), atomically remove the participant from every conversation and delete all their activity rows,cConversations where they were the last member get auto-deleted
     updateMessage?: Handler<[Message], void>,
     updateConversationParticipantActivity?: Handler<[ParticipantActivity], void>,
 

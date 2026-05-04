@@ -181,12 +181,13 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onReadParticipantActivities(handler: function) | participantId: string | activities: ParticipantActivity[] | Should return all participant activity rows for the given participant. |
 
 **Update handlers:**
-| Method | Calls with | Description |
-| ------ | ---------- | ------------|
-| onAddConversationParticipant(handler: function) | conversationId: string, participantId: string, maxParticipants: number, maxConversationsPerParticipant: number | Should atomically add the participant only if the conversation has fewer than `maxParticipants`, the participant is not already in it, and the participant is in fewer than `maxConversationsPerParticipant` conversations. Throw if any condition fails. |
-| onRemoveConversationParticipantAndDeleteParticipantActivity(handler: function) | conversationId: string, participantId: string | Should atomically remove the participant from the conversation and delete their participant activity row. |
-| onUpdateMessage(handler: function) | message: Message | Should update the provided message in the database. The `modifiedAt` field is automatically adjusted by the library if the update is an edit. Existing reactions are preserved across edits. |
-| onUpdateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | Should update the provided participant activity in the database. Guard the update with a participation check so activity is not written back for participants who concurrently left the conversation. |
+| Method | Calls with | Should return | Description |
+| ------ | ---------- | --------------------- | ------------|
+| onAddConversationParticipant(handler: function) | conversationId: string, participantId: string, maxParticipants: number, maxConversationsPerParticipant: number | - | Should atomically add the participant only if the conversation has fewer than `maxParticipants`, the participant is not already in it, and the participant is in fewer than `maxConversationsPerParticipant` conversations. Throw if any condition fails. |
+| onRemoveConversationParticipantAndDeleteParticipantActivity(handler: function) | conversationId: string, participantId: string | - | Should atomically remove the participant from the conversation and delete their participant activity row. |
+| onLeaveAllConversationsForParticipantAndDeleteParticipantActivities(handler: function) | participantId: string | { deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[], remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipants: string[], lastMessage: Message \| null }[] } | Should atomically remove the participant from every conversation they are in and delete all their participant activity rows. Conversations where the participant was the last member should be deleted along with their messages, reactions, invites, and activities. Other conversations should be kept and the participant should be removed from them. Return both groups. |
+| onUpdateMessage(handler: function) | message: Message | - | Should update the provided message in the database. The `modifiedAt` field is automatically adjusted by the library if the update is an edit. Existing reactions are preserved across edits. |
+| onUpdateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | - | Should update the provided participant activity in the database. Guard the update with a participation check so activity is not written back for participants who concurrently left the conversation. |
 
 **Delete handlers:**
 | Method | Calls with | Should return | Description |

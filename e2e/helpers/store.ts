@@ -254,6 +254,28 @@ export class InMemoryStore {
             this.conversationParticipants.get(conversationId)?.delete(participantId);
             this.activities.delete(this.activityKey(conversationId, participantId));
         });
+        server.onLeaveAllConversationsForParticipantAndDeleteParticipantActivities(participantId => {
+            this.bump("leaveAllConversationsForParticipantAndDeleteParticipantActivities");
+            const deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] = [];
+            const remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipants: string[], lastMessage: Message | null }[] = [];
+            for (const [conversationId, set] of [...this.conversationParticipants]) {
+                if (!set.has(participantId)) continue;
+                if (set.size === 1) {
+                    // Last member, cascade-delete the whole conversation
+                    const formerParticipants = [...set];
+                    const deletedInvites = this.deleteConversationAndReturnInvites(conversationId);
+                    deletedConversations.push({ conversationId, formerParticipants, deletedInvites });
+                } else {
+                    // Remove this participant + their activity, surface the post-removal state
+                    set.delete(participantId);
+                    this.activities.delete(this.activityKey(conversationId, participantId));
+                    const record = this.conversations.get(conversationId)!;
+                    const surfaced = this.surfaceConversation(record);
+                    remainingConversations.push({ conversationId, conversationRecord: { ...record }, remainingParticipants: surfaced.participants, lastMessage: surfaced.lastMessage });
+                }
+            }
+            return { deletedConversations, remainingConversations };
+        });
         server.onUpdateMessage(message => {
             this.bump("updateMessage");
             const existing = this.messages.get(message.messageId);

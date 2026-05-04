@@ -101,8 +101,11 @@ export async function revokeInviteByPair(ctx: ServerContext, conversationId: str
 async function joinFlow(ctx: ServerContext, conversationId: string, participantId: string, conversation: Conversation): Promise<{ hooks: AfterHook[], events: PreparedEvent[][] }> {
     const max = effectiveMaxParticipants(conversation.maxSize, ctx.rateLimits.conversationParticipantLimit);
     await getHandler(ctx.handlers, "addConversationParticipant")(conversationId, participantId, max, ctx.rateLimits.conversationLimitPerParticipant);
-    // The participants list changed, force the next read-through to re-fetch
-    ctx.conversationCache.invalidate(conversationId);
+    // Patch the cached snapshot
+    const cached = ctx.conversationCache.get(conversationId);
+    if (cached && !cached.participants.includes(participantId)) {
+        ctx.conversationCache.set(conversationId, { ...cached, participants: [...cached.participants, participantId] });
+    }
     // System messages are authored by the reserved "server" participant, the joining participant id is carried in systemEvent
     const sysMsg = await internalSendMessage(ctx, conversationId, "server", "", { referenceMessageId: null, isForwarded: false }, { type: "participantJoined", participantId });
     return {

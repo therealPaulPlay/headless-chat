@@ -4,6 +4,7 @@ import { type ServerContext, type ServiceResult, fireHook, newId, now } from "..
 import type { PreparedEvent } from "../subscriptions.js";
 import { applyProfanityChecks, isValidEmoji } from "../validation.js";
 import { removeIndicator } from "./indicators.js";
+import { logError } from "../../shared/log.js";
 
 function normalizeOptions(options: MessageOptions | undefined): MessageOptions {
     return {
@@ -123,14 +124,17 @@ export async function addReaction(ctx: ServerContext, participantId: string, mes
     };
     // Consumer's onCreateReaction enforces participation and one-reaction-per-(messageId, participantId), the new reaction replaces any prior one
     await getHandler(ctx.handlers, "createReaction")(reaction);
-    // Patch the cached snapshot if the reaction landed on the conversation's lastMessage
+
+    // Mirror the consumer's replace-on-(messageId, participantId) semantics so the broadcast and the cache stay consistent
+    const updated: Message = { ...existing, reactions: [...existing.reactions.filter(r => r.participantId !== participantId), reaction] };
+
     const cached = ctx.conversationCache.get(existing.conversationId);
     if (cached?.lastMessage?.messageId === messageId) {
-        cached.lastMessage.reactions = cached.lastMessage.reactions.filter(r => r.participantId !== participantId);
-        cached.lastMessage.reactions.push(reaction);
+        cached.lastMessage = updated;
         ctx.conversationCache.set(existing.conversationId, cached);
     }
-    await ctx.subscriptions.emitMessageById(messageId);
+    // Emit the locally constructed updated message rather than re-reading it
+    ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(updated));
     return { result: undefined, hooks: [] };
 }
 
@@ -139,14 +143,23 @@ export async function removeReaction(ctx: ServerContext, participantId: string, 
     if (!reaction) throw new Error("Reaction not found");
     if (reaction.participantId !== participantId) throw new Error("Not authorized to remove this reaction");
     await getHandler(ctx.handlers, "deleteReaction")(reactionId);
-    // Patch the cached snapshot if the reaction's message is the conversation's lastMessage
+
+    // Patch the cached snapshot if the reaction's message is the conversation's lastMessage, and broadcast the patched message without re-reading
     const conversationId = ctx.conversationCache.findKey(c => c.lastMessage?.messageId === reaction.messageId);
     if (conversationId) {
         const cached = ctx.conversationCache.get(conversationId)!;
-        cached.lastMessage!.reactions = cached.lastMessage!.reactions.filter(r => r.reactionId !== reactionId);
+        const patched: Message = { ...cached.lastMessage!, reactions: cached.lastMessage!.reactions.filter(r => r.reactionId !== reactionId) };
+        cached.lastMessage = patched;
         ctx.conversationCache.set(conversationId, cached);
+        ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(patched));
+        return { result: undefined, hooks: [] };
     }
-    await ctx.subscriptions.emitMessageById(reaction.messageId);
+
+    // Fallback for reactions on older (non-cached) messages: re-read so subscribers see the post-removal state
+    try {
+        const message = await getHandler(ctx.handlers, "readMessage")(reaction.messageId);
+        if (message) ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(message));
+    } catch (error) { logError("readMessage", error); }
     return { result: undefined, hooks: [] };
 }
 
