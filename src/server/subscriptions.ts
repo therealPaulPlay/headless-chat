@@ -122,7 +122,7 @@ export class Subscriptions {
         const subs = this.byScope.get(encodeScope(scope));
         const targets = subs ? [...subs] : [];
         // Synthesize a virtual activity update for each live message-scope subscriber (the real DB persist happens when unsubscribing from messages and in getMessages)
-        const activityEvents = targets.flatMap(participantId => this.prepareParticipantActivity({
+        const activityEvents = targets.flatMap(participantId => this.prepareParticipantActivity(participantId, {
             conversationId: message.conversationId,
             participantId,
             lastReadMessageId: message.messageId,
@@ -170,11 +170,19 @@ export class Subscriptions {
         }];
     }
 
-    prepareParticipantActivity(activity: ParticipantActivity): PreparedEvent[] {
+    prepareParticipantActivity(participantId: string, activity: ParticipantActivity): PreparedEvent[] {
         return [{
             scope: { kind: "participantActivity" },
-            data: activity,
-            targets: [activity.participantId],
+            data: { conversationId: activity.conversationId, data: activity },
+            targets: [participantId],
+        }];
+    }
+
+    prepareParticipantActivityDeleted(participantId: string, conversationId: string): PreparedEvent[] {
+        return [{
+            scope: { kind: "participantActivity" },
+            data: { conversationId, data: null },
+            targets: [participantId],
         }];
     }
 

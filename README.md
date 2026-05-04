@@ -88,7 +88,7 @@ Event methods are async because subscribing and unsubscribing roundtrip to the s
 | async offConversation(handler: function) | - | Unsubscribe a handler. |
 | async onInvite(handler: function) | event: { conversationId: string, toParticipantId: string, data: Invite \| null } | Subscribe to per-invite updates. `data: null` means the invite was deleted. |
 | async offInvite(handler: function) | - | Unsubscribe a handler. |
-| async onParticipantActivity(handler: function) | activity: ParticipantActivity | Subscribe to live updates of the calling participant's read state. |
+| async onParticipantActivity(handler: function) | event: { conversationId: string, data: ParticipantActivity \| null } | Subscribe to live updates of the calling participant's read state. `data: null` means the activity was deleted. |
 | async offParticipantActivity(handler: function) | - | Unsubscribe a handler. |
 
 ## Server API

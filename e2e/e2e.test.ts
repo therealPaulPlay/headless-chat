@@ -339,16 +339,16 @@ describe("mixed real-world scenarios", () => {
         await alice.createInvite(conversationId, "bob");
         await bob.acceptInvite(conversationId);
 
-        const bobActivities: ParticipantActivity[] = [];
-        await bob.onParticipantActivity(activity => bobActivities.push(activity));
+        const bobActivities: { conversationId: string, data: ParticipantActivity | null }[] = [];
+        await bob.onParticipantActivity(event => bobActivities.push(event));
         await bob.onMessage(conversationId, () => { });
 
         const messageId = await alice.sendMessage(conversationId, "live");
         await tick();
 
-        const synthetic = bobActivities.find(a => a.conversationId === conversationId && a.lastReadMessageId === messageId);
+        const synthetic = bobActivities.find(e => e.conversationId === conversationId && e.data?.lastReadMessageId === messageId);
         expect(synthetic).toBeTruthy();
-        expect(synthetic?.participantId).toBe("bob");
+        expect(synthetic?.data?.participantId).toBe("bob");
     });
 
     test("onParticipantActivity fires when getMessages persists a new read pointer", async () => {
@@ -359,14 +359,79 @@ describe("mixed real-world scenarios", () => {
         await bob.acceptInvite(conversationId);
 
         // Bob subscribes to activity but NOT to messages, so the only update path is the getMessages persist
-        const bobActivities: ParticipantActivity[] = [];
-        await bob.onParticipantActivity(activity => bobActivities.push(activity));
+        const bobActivities: { conversationId: string, data: ParticipantActivity | null }[] = [];
+        await bob.onParticipantActivity(event => bobActivities.push(event));
 
         await alice.sendMessage(conversationId, "msg");
         await bob.getMessages(conversationId, null, false, 10);
         await tick();
 
-        expect(bobActivities.some(a => a.conversationId === conversationId)).toBe(true);
+        expect(bobActivities.some(e => e.conversationId === conversationId && e.data !== null)).toBe(true);
+    });
+
+    test("onParticipantActivity fires with data: null when the participant leaves a shared conversation, signalling the activity row was removed", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Bob reads to materialize an activity row, then subscribes
+        await alice.sendMessage(conversationId, "hi");
+        await bob.getMessages(conversationId, null, false, 10);
+        const bobActivities: { conversationId: string, data: ParticipantActivity | null }[] = [];
+        await bob.onParticipantActivity(event => bobActivities.push(event));
+
+        await bob.leaveConversation(conversationId);
+        await tick();
+
+        // Bob receives the deletion signal for this conversation's activity, mirroring the data: null pattern of onConversation / onInvite
+        const deletion = bobActivities.find(e => e.conversationId === conversationId && e.data === null);
+        expect(deletion).toBeTruthy();
+    });
+
+    test("onParticipantActivity fires with data: null for the last leaver when the conversation auto-deletes", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+        await alice.sendMessage(conversationId, "solo note");
+        await alice.getMessages(conversationId, null, false, 10);
+        const aliceActivities: { conversationId: string, data: ParticipantActivity | null }[] = [];
+        await alice.onParticipantActivity(event => aliceActivities.push(event));
+
+        await alice.leaveConversation(conversationId);
+        await tick();
+
+        const deletion = aliceActivities.find(e => e.conversationId === conversationId && e.data === null);
+        expect(deletion).toBeTruthy();
+    });
+
+    test("onParticipantActivity fires with data: null for the deleted participant across every conversation they were in (admin deleteParticipant)", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const charlie = transport.addClient("charlie");
+
+        // Bob is in two conversations and has read in both, so two activity rows exist
+        const sharedId = await alice.createConversation();
+        await alice.createInvite(sharedId, "bob");
+        await bob.acceptInvite(sharedId);
+        await alice.sendMessage(sharedId, "in shared");
+        await bob.getMessages(sharedId, null, false, 10);
+
+        const soloId = await charlie.createConversation();
+        await charlie.createInvite(soloId, "bob");
+        await bob.acceptInvite(soloId);
+        await charlie.sendMessage(soloId, "in other");
+        await bob.getMessages(soloId, null, false, 10);
+
+        const bobActivities: { conversationId: string, data: ParticipantActivity | null }[] = [];
+        await bob.onParticipantActivity(event => bobActivities.push(event));
+
+        await transport.server.deleteParticipant("bob");
+        await tick();
+
+        // Both conversations bob was in surface a data: null event for bob
+        expect(bobActivities.some(e => e.conversationId === sharedId && e.data === null)).toBe(true);
+        expect(bobActivities.some(e => e.conversationId === soloId && e.data === null)).toBe(true);
     });
 
     test("multiple senders inviting the same recipient, accept removes all of them but unrelated invites are preserved", async () => {
@@ -1170,12 +1235,12 @@ describe("subscription handling", () => {
         const indicators: Indicator[][] = [];
         const conversations: { conversationId: string, data: Conversation | null }[] = [];
         const invites: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
-        const activities: ParticipantActivity[] = [];
+        const activities: { conversationId: string, data: ParticipantActivity | null }[] = [];
         const messageHandler = (m: Message) => messages.push(m);
         const indicatorHandler = (i: Indicator[]) => indicators.push(i);
         const conversationHandler = (e: { conversationId: string, data: Conversation | null }) => conversations.push(e);
         const inviteHandler = (e: { conversationId: string, toParticipantId: string, data: Invite | null }) => invites.push(e);
-        const activityHandler = (a: ParticipantActivity) => activities.push(a);
+        const activityHandler = (e: { conversationId: string, data: ParticipantActivity | null }) => activities.push(e);
 
         await bob.onMessage(conversationId, messageHandler);
         await bob.onIndicators(conversationId, indicatorHandler);

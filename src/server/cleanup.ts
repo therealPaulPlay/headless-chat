@@ -73,6 +73,8 @@ export class CleanupScheduler {
                     // Handler already deleted the rows, just emit the side-effects and invalidate the conversation + activity caches
                     for (const pid of c.formerParticipantIds) this.ctx.activityCache.invalidate(`${c.conversationId}|${pid}`);
                     this.ctx.conversationCache.invalidate(c.conversationId);
+                    // Signal activity removal for onParticipantActivity event
+                    this.ctx.subscriptions.emit(...c.formerParticipantIds.map(pid => this.ctx.subscriptions.prepareParticipantActivityDeleted(pid, c.conversationId)));
                     const hooks = emitConversationDeleted(this.ctx, c.conversationId, c.formerParticipantIds, c.deletedInvites);
                     for (const hook of hooks) await hook();
                 }

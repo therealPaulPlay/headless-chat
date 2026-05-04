@@ -21,6 +21,8 @@ export async function deleteParticipant(ctx: ServerContext, participantId: strin
 function handleAutoDeleted(ctx: ServerContext, participantId: string, c: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }): AfterHook[] {
     for (const pid of c.formerParticipantIds) ctx.activityCache.invalidate(`${c.conversationId}|${pid}`);
     ctx.conversationCache.invalidate(c.conversationId);
+    // Signal activity removal for onParticipantActivity
+    ctx.subscriptions.emit(...c.formerParticipantIds.map(pid => ctx.subscriptions.prepareParticipantActivityDeleted(pid, c.conversationId)));
     return [
         ...emitConversationDeleted(ctx, c.conversationId, c.formerParticipantIds, c.deletedInvites),
         () => fireHook(ctx.handlers, "afterParticipantLeft", c.conversationId, participantId),
@@ -31,9 +33,10 @@ function handleRemaining(ctx: ServerContext, participantId: string, r: { convers
     ctx.activityCache.invalidate(`${r.conversationId}|${participantId}`);
     const refreshed: Conversation = { ...r.conversationRecord, participantIds: r.remainingParticipantIds, lastMessage: r.lastMessage };
     ctx.conversationCache.set(r.conversationId, refreshed);
-    // Leaver sees the conversation gone, remaining participants get the refreshed snapshot
+    // Leaver sees the conversation gone + their activity removed, remaining participants get the refreshed snapshot
     ctx.subscriptions.emit(
         ctx.subscriptions.prepareConversationDeleted(r.conversationId, [participantId]),
+        ctx.subscriptions.prepareParticipantActivityDeleted(participantId, r.conversationId),
         ctx.subscriptions.prepareConversation(refreshed),
     );
     return [() => fireHook(ctx.handlers, "afterParticipantLeft", r.conversationId, participantId)];

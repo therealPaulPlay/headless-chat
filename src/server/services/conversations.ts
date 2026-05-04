@@ -181,6 +181,8 @@ export async function leaveConversation(ctx: ServerContext, participantId: strin
         for (const pid of conversation.participantIds) ctx.activityCache.invalidate(`${conversationId}|${pid}`);
         ctx.conversationCache.invalidate(conversationId);
         const deleteHooks = emitConversationDeleted(ctx, conversationId, conversation.participantIds, deletedInvites);
+        // Signal activity removal to every former participant subscribed to onParticipantActivity
+        ctx.subscriptions.emit(...conversation.participantIds.map(pid => ctx.subscriptions.prepareParticipantActivityDeleted(pid, conversationId)));
         return {
             result: undefined,
             hooks: [() => fireHook(ctx.handlers, "afterParticipantLeft", conversationId, participantId), ...deleteHooks],
@@ -196,7 +198,11 @@ export async function leaveConversation(ctx: ServerContext, participantId: strin
 
     // sysMsg.events already carries the refreshed Conversation snapshot (targeted at remaining participants)
     // Recipient sets are disjoint - the leaver is no longer in participants, so the leaver only gets the deleted event
-    ctx.subscriptions.emit(ctx.subscriptions.prepareConversationDeleted(conversationId, [participantId]), ...sysMsg.events);
+    ctx.subscriptions.emit(
+        ctx.subscriptions.prepareConversationDeleted(conversationId, [participantId]),
+        ctx.subscriptions.prepareParticipantActivityDeleted(participantId, conversationId),
+        ...sysMsg.events,
+    );
 
     return {
         result: undefined,

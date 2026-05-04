@@ -10,6 +10,7 @@ type AnyHandler = (...args: unknown[]) => void;
 
 type ConversationEvent = { conversationId: string, data: Conversation | null };
 type InviteEvent = { conversationId: string, toParticipantId: string, data: Invite | null };
+type ParticipantActivityEvent = { conversationId: string, data: ParticipantActivity | null };
 
 export class Client {
     private dispatch: ClientDispatch;
@@ -214,10 +215,10 @@ export class Client {
         return this.unsubscribe(handler as AnyHandler);
     }
 
-    onParticipantActivity(handler: (activity: ParticipantActivity) => void): Promise<void> {
+    onParticipantActivity(handler: (event: ParticipantActivityEvent) => void): Promise<void> {
         return this.subscribe(encodeScope({ kind: "participantActivity" }), handler as AnyHandler);
     }
-    offParticipantActivity(handler: (activity: ParticipantActivity) => void): Promise<void> {
+    offParticipantActivity(handler: (event: ParticipantActivityEvent) => void): Promise<void> {
         return this.unsubscribe(handler as AnyHandler);
     }
 }
