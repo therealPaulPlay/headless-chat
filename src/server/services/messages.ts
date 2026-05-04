@@ -47,6 +47,7 @@ function buildMessage(participantId: string, conversationId: string, text: strin
     };
 }
 
+// Client path
 export async function sendMessage(ctx: ServerContext, participantId: string, conversationId: string, text: string, options?: MessageOptions): Promise<ServiceResult<string>> {
     if (typeof text !== "string" || text.length === 0) throw new Error("Message must be a non-empty string");
     ctx.rateLimiter.trackMessage(participantId);
@@ -150,7 +151,7 @@ export async function removeReaction(ctx: ServerContext, participantId: string, 
 }
 
 // Server-side path, bypasses rate limit + profanity check, returns events for the caller to bundle or emit
-export async function addMessage(ctx: ServerContext, conversationId: string, participantId: string, text: string, options?: MessageOptions, systemEvent?: SystemEvent): Promise<ServiceResult<string> & { events: PreparedEvent[][] }> {
+export async function internalSendMessage(ctx: ServerContext, conversationId: string, participantId: string, text: string, options?: MessageOptions, systemEvent?: SystemEvent): Promise<ServiceResult<string> & { events: PreparedEvent[][] }> {
     const message = buildMessage(participantId, conversationId, text, options, systemEvent ?? null);
     const events = await persistAndPrepareMessage(ctx, message);
     return { result: message.messageId, hooks: [() => fireHook(ctx.handlers, "afterMessageCreated", message)], events };

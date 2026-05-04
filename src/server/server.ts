@@ -249,7 +249,7 @@ export class Server {
     }
 
     sendMessage(conversationId: string, participantId: string, message: string, options?: MessageOptions, systemEvent?: SystemEvent): Promise<string> {
-        return this.runAdmin(messagesService.addMessage(this.ctx, conversationId, participantId, message, options, systemEvent).then(({ events, ...rest }) => {
+        return this.runAdmin(messagesService.internalSendMessage(this.ctx, conversationId, participantId, message, options, systemEvent).then(({ events, ...rest }) => {
             this.subscriptions.emit(...events);
             return rest;
         }));

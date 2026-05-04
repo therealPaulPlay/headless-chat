@@ -3,7 +3,7 @@ import { getHandler } from "../server-types.js";
 import { type AfterHook, type ServerContext, type ServiceResult, fireHook, newId, now } from "../context.js";
 import type { PreparedEvent } from "../subscriptions.js";
 import { effectiveMaxParticipants } from "../validation.js";
-import { addMessage } from "./messages.js";
+import { internalSendMessage } from "./messages.js";
 import { logError } from "../../shared/log.js";
 
 // Read-through cache lookup, on miss falls back to the readConversation handler and warms the cache
@@ -104,7 +104,7 @@ async function joinFlow(ctx: ServerContext, conversationId: string, participantI
     // The participants list changed, force the next read-through to re-fetch
     ctx.conversationCache.invalidate(conversationId);
     // System messages are authored by the reserved "server" participant, the joining participant id is carried in systemEvent
-    const sysMsg = await addMessage(ctx, conversationId, "server", "", { referenceMessageId: null, isForwarded: false }, { type: "participantJoined", participantId });
+    const sysMsg = await internalSendMessage(ctx, conversationId, "server", "", { referenceMessageId: null, isForwarded: false }, { type: "participantJoined", participantId });
     return {
         hooks: [() => fireHook(ctx.handlers, "afterParticipantJoined", conversationId, participantId), ...sysMsg.hooks],
         events: sysMsg.events,
@@ -189,7 +189,7 @@ export async function leaveConversation(ctx: ServerContext, participantId: strin
     ctx.activityCache.invalidate(`${conversationId}|${participantId}`);
     ctx.conversationCache.invalidate(conversationId);
     // System messages are authored by the reserved "server" participant, the leaving participant id is carried in systemEvent
-    const sysMsg = await addMessage(ctx, conversationId, "server", "", { referenceMessageId: null, isForwarded: false }, { type: "participantLeft", participantId });
+    const sysMsg = await internalSendMessage(ctx, conversationId, "server", "", { referenceMessageId: null, isForwarded: false }, { type: "participantLeft", participantId });
 
     // sysMsg.events already carries the refreshed Conversation snapshot (targeted at remaining participants)
     // Recipient sets are disjoint - the leaver is no longer in participants, so the leaver only gets the deleted event
