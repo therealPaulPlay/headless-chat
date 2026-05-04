@@ -846,6 +846,74 @@ describe("cache invalidation", () => {
     });
 });
 
+describe("cache TTL eviction", () => {
+    let transport: FakeTransport;
+
+    beforeEach(() => { transport = new FakeTransport(); });
+    afterEach(() => { transport.stop(); });
+
+    test("conversation cache entries past the TTL are evicted on sweep", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+        expect(transport.conversationCache.get(conversationId)).toBeTruthy();
+
+        // Sweep with a threshold in the future evicts everything (every entry's lastTouchedMs is now older than the threshold)
+        transport.conversationCache.sweep(Date.now() + 1000);
+        expect(transport.conversationCache.get(conversationId)).toBeUndefined();
+    });
+
+    test("activity cache entries past the TTL are evicted on sweep", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        await alice.sendMessage(conversationId, "msg");
+        await bob.getMessages(conversationId, null, false, 10);
+
+        const key = `${conversationId}|bob`;
+        expect(transport.activityCache.get(key)).toBeDefined();
+
+        transport.activityCache.sweep(Date.now() + 1000);
+        expect(transport.activityCache.get(key)).toBeUndefined();
+    });
+
+    test("a fresh write to an entry resets its lifetime, while a stale entry next to it gets evicted", async () => {
+        const alice = transport.addClient("alice");
+        const staleId = await alice.createConversation();
+        const freshId = await alice.createConversation();
+
+        // Tiny wait (5ms) so the threshold lands strictly between the create timestamps and the upcoming refresh
+        await new Promise(resolve => setTimeout(resolve, 5));
+        const thresholdBetween = Date.now();
+        await alice.sendMessage(freshId, "fresh write");
+
+        transport.conversationCache.sweep(thresholdBetween);
+        // staleId was last touched before the threshold, gets evicted
+        expect(transport.conversationCache.get(staleId)).toBeUndefined();
+        // freshId was re-touched by sendMessage after the threshold, survives
+        expect(transport.conversationCache.get(freshId)).toBeTruthy();
+    });
+
+    test("the periodic cache sweep wired in CleanupScheduler evicts past-TTL entries automatically", async () => {
+        const tight = new FakeTransport(undefined, {
+            cacheEntryTtlMinutes: 1 / 60, // 1 second TTL
+            cacheCleanupIntervalSeconds: 1, // sweep every second
+        });
+        try {
+            const alice = tight.addClient("alice");
+            const conversationId = await alice.createConversation();
+            expect(tight.conversationCache.get(conversationId)).toBeTruthy();
+
+            // Wait past TTL + at least one sweep tick
+            await new Promise(resolve => setTimeout(resolve, 2200));
+            expect(tight.conversationCache.get(conversationId)).toBeUndefined();
+        } finally {
+            tight.stop();
+        }
+    });
+});
+
 describe("admin functions", () => {
     let transport: FakeTransport;
 

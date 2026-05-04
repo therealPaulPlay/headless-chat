@@ -49,6 +49,8 @@ export class Server {
         this.cleanup = {
             indicatorTtlSeconds: (cleanup.indicatorTtlSeconds && cleanup.indicatorTtlSeconds > 0) ? cleanup.indicatorTtlSeconds : 3,
             indicatorCleanupIntervalSeconds: (cleanup.indicatorCleanupIntervalSeconds && cleanup.indicatorCleanupIntervalSeconds > 0) ? cleanup.indicatorCleanupIntervalSeconds : 5,
+            cacheEntryTtlMinutes: (cleanup.cacheEntryTtlMinutes && cleanup.cacheEntryTtlMinutes > 0) ? cleanup.cacheEntryTtlMinutes : 10,
+            cacheCleanupIntervalSeconds: (cleanup.cacheCleanupIntervalSeconds && cleanup.cacheCleanupIntervalSeconds > 0) ? cleanup.cacheCleanupIntervalSeconds : 30,
             messageAfterDays: cleanup.messageAfterDays ?? null,
             conversationAfterInactiveDays: cleanup.conversationAfterInactiveDays ?? null,
             inviteAfterDays: cleanup.inviteAfterDays ?? null,

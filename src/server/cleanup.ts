@@ -8,7 +8,8 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 export class CleanupScheduler {
     private indicatorTimer: ReturnType<typeof setInterval> | null = null;
     private dailyTimer: ReturnType<typeof setInterval> | null = null;
-    private sweepTimer: ReturnType<typeof setInterval> | null = null;
+    private rateLimitSweepTimer: ReturnType<typeof setInterval> | null = null;
+    private cacheSweepTimer: ReturnType<typeof setInterval> | null = null;
 
     constructor(
         private ctx: ServerContext,
@@ -23,23 +24,34 @@ export class CleanupScheduler {
         this.dailyTimer = setInterval(() => void this.runDaily(), ONE_DAY_MS);
         this.dailyTimer.unref?.();
 
-        this.sweepTimer = setInterval(() => this.ctx.rateLimiter.sweep(), this.sweepIntervalSeconds * 1000);
-        this.sweepTimer.unref?.();
+        this.rateLimitSweepTimer = setInterval(() => this.ctx.rateLimiter.sweep(), this.sweepIntervalSeconds * 1000);
+        this.rateLimitSweepTimer.unref?.();
+
+        this.cacheSweepTimer = setInterval(() => this.runCaches(), this.cleanup.cacheCleanupIntervalSeconds * 1000);
+        this.cacheSweepTimer.unref?.();
     }
 
     stop(): void {
         if (this.indicatorTimer) clearInterval(this.indicatorTimer);
         if (this.dailyTimer) clearInterval(this.dailyTimer);
-        if (this.sweepTimer) clearInterval(this.sweepTimer);
+        if (this.rateLimitSweepTimer) clearInterval(this.rateLimitSweepTimer);
+        if (this.cacheSweepTimer) clearInterval(this.cacheSweepTimer);
         this.indicatorTimer = null;
         this.dailyTimer = null;
-        this.sweepTimer = null;
+        this.rateLimitSweepTimer = null;
+        this.cacheSweepTimer = null;
     }
 
     private runIndicators(): void {
         // Broadcast affected conversations so subscribers see the post-sweep indicator state
         const affected = this.ctx.indicators.sweep(Date.now() - this.cleanup.indicatorTtlSeconds * 1000);
         for (const conversationId of affected) this.ctx.subscriptions.emit(this.ctx.subscriptions.prepareIndicators(conversationId));
+    }
+
+    private runCaches(): void {
+        const threshold = Date.now() - this.cleanup.cacheEntryTtlMinutes * 60 * 1000;
+        this.ctx.activityCache.sweep(threshold);
+        this.ctx.conversationCache.sweep(threshold);
     }
 
     private async runDaily(): Promise<void> {

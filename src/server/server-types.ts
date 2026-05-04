@@ -21,6 +21,8 @@ export type RateLimitOptions = {
 export type CleanupOptions = {
     indicatorTtlSeconds?: number,
     indicatorCleanupIntervalSeconds?: number,
+    cacheEntryTtlMinutes?: number,
+    cacheCleanupIntervalSeconds?: number,
     messageAfterDays?: number | null,
     conversationAfterInactiveDays?: number | null,
     inviteAfterDays?: number | null,
@@ -37,6 +39,8 @@ export type ResolvedRateLimits = {
 export type ResolvedCleanup = {
     indicatorTtlSeconds: number,
     indicatorCleanupIntervalSeconds: number,
+    cacheEntryTtlMinutes: number,
+    cacheCleanupIntervalSeconds: number,
     messageAfterDays: number | null,
     conversationAfterInactiveDays: number | null,
     inviteAfterDays: number | null,

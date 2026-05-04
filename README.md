@@ -120,10 +120,11 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 {
     indicatorTtlSeconds?: number, // Defaults to 3, indicators older than this get swept
     indicatorCleanupIntervalSeconds?: number, // Defaults to 5, how often the sweep runs
+    cacheEntryTtlMinutes?: number, // Defaults to 10, in-memory cache entries get evicted this long after their last write
+    cacheCleanupIntervalSeconds?: number, // Defaults to 30, how often the cache sweep runs
     messageAfterDays?: number, // Defaults to null = disabled
     conversationAfterInactiveDays?: number, // Defaults to null = disabled, inactive means no new messages have been sent
     inviteAfterDays?: number, // Defaults to null = disabled
-    activityCacheLifetimeMinutes?: number, // Period after which the participant-activity in-memory cache is (fully) cleared
 }
 ```
 
