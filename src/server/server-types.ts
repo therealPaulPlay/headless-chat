@@ -71,8 +71,8 @@ export type Handlers = {
     addConversationParticipant?: Handler<[string, string, number, number], void>, // (conversationId, participantId, maxParticipants, maxConversationsPerParticipant), throw if either cap exceeded
     removeConversationParticipantAndDeleteParticipantActivity?: Handler<[string, string], void>, // (conversationId, participantId), atomically remove the participant from the conversation and delete their participant activity row
     leaveAllConversationsForParticipantAndDeleteParticipantActivities?: Handler<[string], {
-        deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[],
-        remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipants: string[], lastMessage: Message | null }[],
+        deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[],
+        remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipantIds: string[], lastMessage: Message | null }[],
     }>, // (participantId), atomically remove the participant from every conversation and delete all their activity rows,cConversations where they were the last member get auto-deleted
     updateMessage?: Handler<[Message], void>,
     updateConversationParticipantActivity?: Handler<[ParticipantActivity], void>,
@@ -81,7 +81,7 @@ export type Handlers = {
     deleteConversationWithMessagesReactionsInvitesAndActivities?: Handler<[string], { deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }>,
     deleteInvites?: Handler<[{ conversationId: string, fromParticipantId: string, toParticipantId: string }[]], void>,
     deleteMessagesBefore?: Handler<[Date], void>,
-    deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore?: Handler<[Date], { deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] }>,
+    deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore?: Handler<[Date], { deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] }>,
     deleteInvitesBefore?: Handler<[Date], { deletedInvites: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] }>,
 
     participantAuth?: Handler<[string, unknown], boolean>,

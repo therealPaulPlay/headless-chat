@@ -17,10 +17,10 @@ export async function readConversationCached(ctx: ServerContext, conversationId:
 
 // Emits side-effects for an already-deleted conversation, broadcasts now and returns hooks to fire later
 // Use when the rows have already been removed
-export function emitConversationDeleted(ctx: ServerContext, conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[]): AfterHook[] {
+export function emitConversationDeleted(ctx: ServerContext, conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[]): AfterHook[] {
     // Bundle the conversation deletion with all invite deletions so subscribers see them atomically
     ctx.subscriptions.emit(
-        ctx.subscriptions.prepareConversationDeleted(conversationId, formerParticipants),
+        ctx.subscriptions.prepareConversationDeleted(conversationId, formerParticipantIds),
         ...deletedInvites.map(invite => ctx.subscriptions.prepareInviteDeleted(conversationId, invite.fromParticipantId, invite.toParticipantId)),
     );
     const hooks: AfterHook[] = [() => fireHook(ctx.handlers, "afterConversationDeleted", conversationId)];
@@ -40,7 +40,7 @@ export async function createConversation(ctx: ServerContext, participantId: stri
     };
     // Consumer must atomically insert the conversation row and the creator's participant seat, throwing if the creator is at the per-participant cap
     await getHandler(ctx.handlers, "createConversation")(record, participantId, ctx.rateLimits.conversationLimitPerParticipant);
-    const surfaced: Conversation = { ...record, participants: [participantId], lastMessage: null };
+    const surfaced: Conversation = { ...record, participantIds: [participantId], lastMessage: null };
     ctx.conversationCache.set(conversationId, surfaced);
     ctx.subscriptions.emit(ctx.subscriptions.prepareConversation(surfaced));
     return { result: conversationId, hooks: [() => fireHook(ctx.handlers, "afterConversationCreated", surfaced)] };
@@ -57,11 +57,11 @@ export async function createInviteAdmin(ctx: ServerContext, fromParticipantId: s
 
     const conversation = await readConversationCached(ctx, conversationId);
     if (!conversation) throw new Error("Conversation not found");
-    if (!conversation.participants.includes(fromParticipantId)) throw new Error("Not a participant of this conversation");
+    if (!conversation.participantIds.includes(fromParticipantId)) throw new Error("Not a participant of this conversation");
 
     // Capacity check is best-effort, accept-invite enforces it atomically
     const max = effectiveMaxParticipants(conversation.maxSize, ctx.rateLimits.conversationParticipantLimit);
-    if (conversation.participants.length >= max) throw new Error("Conversation is full");
+    if (conversation.participantIds.length >= max) throw new Error("Conversation is full");
 
     // Optional consumer-defined gate, e.g. for blocking participants
     if (ctx.handlers.inviteAuth) {
@@ -103,8 +103,8 @@ async function joinFlow(ctx: ServerContext, conversationId: string, participantI
     await getHandler(ctx.handlers, "addConversationParticipant")(conversationId, participantId, max, ctx.rateLimits.conversationLimitPerParticipant);
     // Patch the cached snapshot
     const cached = ctx.conversationCache.get(conversationId);
-    if (cached && !cached.participants.includes(participantId)) {
-        ctx.conversationCache.set(conversationId, { ...cached, participants: [...cached.participants, participantId] });
+    if (cached && !cached.participantIds.includes(participantId)) {
+        ctx.conversationCache.set(conversationId, { ...cached, participantIds: [...cached.participantIds, participantId] });
     }
     // System messages are authored by the reserved "server" participant, the joining participant id is carried in systemEvent
     const sysMsg = await internalSendMessage(ctx, conversationId, "server", "", { referenceMessageId: null, isForwarded: false }, { type: "participantJoined", participantId });
@@ -123,7 +123,7 @@ export async function acceptInvite(ctx: ServerContext, participantId: string, co
 
     const hooks: AfterHook[] = [];
     const eventLists: PreparedEvent[][] = [];
-    if (!conversation.participants.includes(participantId)) {
+    if (!conversation.participantIds.includes(participantId)) {
         const joinResult = await joinFlow(ctx, conversationId, participantId, conversation);
         hooks.push(...joinResult.hooks);
         eventLists.push(...joinResult.events);
@@ -149,7 +149,7 @@ export async function joinConversation(ctx: ServerContext, conversationId: strin
 
     const hooks: AfterHook[] = [];
     const eventLists: PreparedEvent[][] = [];
-    if (!conversation.participants.includes(participantId)) {
+    if (!conversation.participantIds.includes(participantId)) {
         const joinResult = await joinFlow(ctx, conversationId, participantId, conversation);
         hooks.push(...joinResult.hooks);
         eventLists.push(...joinResult.events);
@@ -173,14 +173,14 @@ export async function declineInvite(ctx: ServerContext, participantId: string, c
 export async function leaveConversation(ctx: ServerContext, participantId: string, conversationId: string): Promise<ServiceResult<void>> {
     const conversation = await readConversationCached(ctx, conversationId);
     if (!conversation) throw new Error("Conversation not found");
-    if (!conversation.participants.includes(participantId)) throw new Error("Not a participant of this conversation");
+    if (!conversation.participantIds.includes(participantId)) throw new Error("Not a participant of this conversation");
 
-    if (conversation.participants.length === 1) {
+    if (conversation.participantIds.length === 1) {
         // Delete conversation if now empty
         const { deletedInvites } = await getHandler(ctx.handlers, "deleteConversationWithMessagesReactionsInvitesAndActivities")(conversationId);
-        for (const pid of conversation.participants) ctx.activityCache.invalidate(`${conversationId}|${pid}`);
+        for (const pid of conversation.participantIds) ctx.activityCache.invalidate(`${conversationId}|${pid}`);
         ctx.conversationCache.invalidate(conversationId);
-        const deleteHooks = emitConversationDeleted(ctx, conversationId, conversation.participants, deletedInvites);
+        const deleteHooks = emitConversationDeleted(ctx, conversationId, conversation.participantIds, deletedInvites);
         return {
             result: undefined,
             hooks: [() => fireHook(ctx.handlers, "afterParticipantLeft", conversationId, participantId), ...deleteHooks],

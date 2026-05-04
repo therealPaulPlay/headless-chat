@@ -41,8 +41,8 @@ export class InMemoryStore {
     private surfaceConversation(record: ConversationRecord): Conversation {
         const messagesIn = [...this.messages.values()].filter(m => m.conversationId === record.conversationId);
         const lastMessage = messagesIn.length === 0 ? null : messagesIn.reduce((a, b) => a.createdAt.getTime() > b.createdAt.getTime() ? a : b);
-        const participants = [...(this.conversationParticipants.get(record.conversationId) ?? [])];
-        return { ...record, participants, lastMessage };
+        const participantIds = [...(this.conversationParticipants.get(record.conversationId) ?? [])];
+        return { ...record, participantIds, lastMessage };
     }
 
     private isParticipant(conversationId: string, participantId: string): boolean {
@@ -256,22 +256,22 @@ export class InMemoryStore {
         });
         server.onLeaveAllConversationsForParticipantAndDeleteParticipantActivities(participantId => {
             this.bump("leaveAllConversationsForParticipantAndDeleteParticipantActivities");
-            const deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] = [];
-            const remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipants: string[], lastMessage: Message | null }[] = [];
+            const deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] = [];
+            const remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipantIds: string[], lastMessage: Message | null }[] = [];
             for (const [conversationId, set] of [...this.conversationParticipants]) {
                 if (!set.has(participantId)) continue;
                 if (set.size === 1) {
                     // Last member, cascade-delete the whole conversation
-                    const formerParticipants = [...set];
+                    const formerParticipantIds = [...set];
                     const deletedInvites = this.deleteConversationAndReturnInvites(conversationId);
-                    deletedConversations.push({ conversationId, formerParticipants, deletedInvites });
+                    deletedConversations.push({ conversationId, formerParticipantIds, deletedInvites });
                 } else {
                     // Remove this participant + their activity, surface the post-removal state
                     set.delete(participantId);
                     this.activities.delete(this.activityKey(conversationId, participantId));
                     const record = this.conversations.get(conversationId)!;
                     const surfaced = this.surfaceConversation(record);
-                    remainingConversations.push({ conversationId, conversationRecord: { ...record }, remainingParticipants: surfaced.participants, lastMessage: surfaced.lastMessage });
+                    remainingConversations.push({ conversationId, conversationRecord: { ...record }, remainingParticipantIds: surfaced.participantIds, lastMessage: surfaced.lastMessage });
                 }
             }
             return { deletedConversations, remainingConversations };
@@ -316,13 +316,13 @@ export class InMemoryStore {
         });
         server.onDeleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore(thresholdDate => {
             this.bump("deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore");
-            const deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] = [];
+            const deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] = [];
             for (const [conversationId, conversation] of [...this.conversations]) {
                 if (conversation.lastActivityAt.getTime() >= thresholdDate.getTime()) continue;
 
-                const formerParticipants = [...(this.conversationParticipants.get(conversationId) ?? [])];
+                const formerParticipantIds = [...(this.conversationParticipants.get(conversationId) ?? [])];
                 const deletedInvites = this.deleteConversationAndReturnInvites(conversationId);
-                deletedConversations.push({ conversationId, formerParticipants, deletedInvites });
+                deletedConversations.push({ conversationId, formerParticipantIds, deletedInvites });
             }
             return { deletedConversations };
         });

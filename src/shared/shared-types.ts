@@ -6,7 +6,7 @@ export type ConversationRecord = {
 }
 
 export type Conversation = ConversationRecord & {
-    participants: string[],
+    participantIds: string[],
     lastMessage: Message | null,
 }
 

@@ -4,6 +4,7 @@ Slightly opinionated core chat logic. No database implementation, no transport i
 
 - A simple to integrate API
 - Robust chat logic with reactions, replies, typing indicators & more
+- Rigorous caching built-in
 - Something that works with your own DB
 - Freedom to choose your protocol (WS & SSE recommended)
 
@@ -176,7 +177,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onReadInvitesInvolvingParticipant(handler: function) | participantId: string | invites: Invite[] | Should return all invites where the participant is the sender or recipient, ordered by `createdAt` descending. |
 | onReadInvitesForRecipient(handler: function) | conversationId: string, toParticipantId: string | invites: Invite[] | Should return all invites the recipient has for the conversation across all senders. |
 | onReadInvite(handler: function) | conversationId: string, fromParticipantId: string, toParticipantId: string | invite: Invite \| null | Should return the invite matching the triple, or null. |
-| onReadAliases(handler: function) | participants: string[] | aliases: Alias[] | Should return all aliases for the provided participant IDs. In a simple implementation, this can look up the usernames from an existing users table. |
+| onReadAliases(handler: function) | participantIds: string[] | aliases: Alias[] | Should return all aliases for the provided participant IDs. In a simple implementation, this can look up the usernames from an existing users table. |
 | onReadConversationParticipantActivity(handler: function) | conversationId: string, participantId: string | participantActivity: ParticipantActivity \| null | Should return the participant activity from the database or `null` if it does not exist. |
 | onReadParticipantActivities(handler: function) | participantId: string | activities: ParticipantActivity[] | Should return all participant activity rows for the given participant. |
 
@@ -185,7 +186,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | ------ | ---------- | --------------------- | ------------|
 | onAddConversationParticipant(handler: function) | conversationId: string, participantId: string, maxParticipants: number, maxConversationsPerParticipant: number | - | Should atomically add the participant only if the conversation has fewer than `maxParticipants`, the participant is not already in it, and the participant is in fewer than `maxConversationsPerParticipant` conversations. Throw if any condition fails. |
 | onRemoveConversationParticipantAndDeleteParticipantActivity(handler: function) | conversationId: string, participantId: string | - | Should atomically remove the participant from the conversation and delete their participant activity row. |
-| onLeaveAllConversationsForParticipantAndDeleteParticipantActivities(handler: function) | participantId: string | { deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[], remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipants: string[], lastMessage: Message \| null }[] } | Should atomically remove the participant from every conversation they are in and delete all their participant activity rows. Conversations where the participant was the last member should be deleted along with their messages, reactions, invites, and activities. Other conversations should be kept and the participant should be removed from them. Return both groups. |
+| onLeaveAllConversationsForParticipantAndDeleteParticipantActivities(handler: function) | participantId: string | { deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[], remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipantIds: string[], lastMessage: Message \| null }[] } | Should atomically remove the participant from every conversation they are in and delete all their participant activity rows. Conversations where the participant was the last member should be deleted along with their messages, reactions, invites, and activities. Other conversations should be kept and the participant should be removed from them. Return both groups. |
 | onUpdateMessage(handler: function) | message: Message | - | Should update the provided message in the database. The `modifiedAt` field is automatically adjusted by the library if the update is an edit. Existing reactions are preserved across edits. |
 | onUpdateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | - | Should update the provided participant activity in the database. Guard the update with a participation check so activity is not written back for participants who concurrently left the conversation. |
 
@@ -196,7 +197,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onDeleteConversationWithMessagesReactionsInvitesAndActivities(handler: function) | conversationId: string | { deletedInvites: { fromParticipantId: string, toParticipantId: string }[] } | Should atomically delete the conversation, its messages, reactions, outstanding invites, participant activities, and participants. Capture and return the deleted invite pairs. |
 | onDeleteInvites(handler: function) | invites: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] | - | Should delete the provided invites in the database. |
 | onDeleteMessagesBefore(handler: function) | thresholdDate: Date | - | Should delete all messages whose `createdAt` is before `thresholdDate`, plus their reactions. |
-| onDeleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore(handler: function) | thresholdDate: Date | { deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] } | Bulk variant of the single-conversation handler above. Should atomically delete every conversation whose `lastActivityAt` is before `thresholdDate`, along with its messages, reactions, outstanding invites, participant activities, and participants. Capture and return the participants and invite pairs per deleted conversation. |
+| onDeleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore(handler: function) | thresholdDate: Date | { deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] } | Bulk variant of the single-conversation handler above. Should atomically delete every conversation whose `lastActivityAt` is before `thresholdDate`, along with its messages, reactions, outstanding invites, participant activities, and participants. Capture and return the participants and invite pairs per deleted conversation. |
 | onDeleteInvitesBefore(handler: function) | thresholdDate: Date | { deletedInvites: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] } | Should atomically delete all invites whose `createdAt` is before `thresholdDate`. Capture and return the deleted invite triples. |
 
 **Validation handlers:**
@@ -246,11 +247,11 @@ The shape your DB stores and what `onCreateConversation` receives.
 
 #### Conversation
 
-The surfaced shape the client receives. `participants` is sourced from your junction table.
+The surfaced shape the client receives. `participantIds` is sourced from your junction table.
 
 ```ts
 ConversationRecord & {
-    participants: string[], // Participant IDs
+    participantIds: string[],
     lastMessage: Message | null, // Can be null if the conversation has no messages yet
 }
 ```

@@ -11,11 +11,13 @@ export class IndicatorStore {
         inner.set(participantId, createdAt.getTime());
     }
 
-    delete(conversationId: string, participantId: string): void {
+    // Returns whether an entry was actually removed
+    delete(conversationId: string, participantId: string): boolean {
         const inner = this.byConversation.get(conversationId);
-        if (!inner) return;
+        if (!inner?.has(participantId)) return false;
         inner.delete(participantId);
         if (inner.size === 0) this.byConversation.delete(conversationId);
+        return true;
     }
 
     list(conversationId: string): Indicator[] {

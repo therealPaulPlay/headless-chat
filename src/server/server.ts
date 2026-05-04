@@ -101,8 +101,8 @@ export class Server {
     onAddConversationParticipant(handler: Handler<[string, string, number, number], void>) { this.handlers.addConversationParticipant = handler; }
     onRemoveConversationParticipantAndDeleteParticipantActivity(handler: Handler<[string, string], void>) { this.handlers.removeConversationParticipantAndDeleteParticipantActivity = handler; }
     onLeaveAllConversationsForParticipantAndDeleteParticipantActivities(handler: Handler<[string], {
-        deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[],
-        remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipants: string[], lastMessage: Message | null }[],
+        deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[],
+        remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipantIds: string[], lastMessage: Message | null }[],
     }>) { this.handlers.leaveAllConversationsForParticipantAndDeleteParticipantActivities = handler; }
     onUpdateMessage(handler: Handler<[Message], void>) { this.handlers.updateMessage = handler; }
     onUpdateConversationParticipantActivity(handler: Handler<[ParticipantActivity], void>) { this.handlers.updateConversationParticipantActivity = handler; }
@@ -111,7 +111,7 @@ export class Server {
     onDeleteConversationWithMessagesReactionsInvitesAndActivities(handler: Handler<[string], { deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }>) { this.handlers.deleteConversationWithMessagesReactionsInvitesAndActivities = handler; }
     onDeleteInvites(handler: Handler<[{ conversationId: string, fromParticipantId: string, toParticipantId: string }[]], void>) { this.handlers.deleteInvites = handler; }
     onDeleteMessagesBefore(handler: Handler<[Date], void>) { this.handlers.deleteMessagesBefore = handler; }
-    onDeleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore(handler: Handler<[Date], { deletedConversations: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] }>) { this.handlers.deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore = handler; }
+    onDeleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore(handler: Handler<[Date], { deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] }>) { this.handlers.deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore = handler; }
     onDeleteInvitesBefore(handler: Handler<[Date], { deletedInvites: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] }>) { this.handlers.deleteInvitesBefore = handler; }
 
     onParticipantAuth(handler: Handler<[string, unknown], boolean>) { this.handlers.participantAuth = handler; }

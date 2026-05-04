@@ -71,9 +71,9 @@ export class CleanupScheduler {
                 const { deletedConversations } = await handler(new Date(now - this.cleanup.conversationAfterInactiveDays * ONE_DAY_MS));
                 for (const c of deletedConversations) {
                     // Handler already deleted the rows, just emit the side-effects and invalidate the conversation + activity caches
-                    for (const pid of c.formerParticipants) this.ctx.activityCache.invalidate(`${c.conversationId}|${pid}`);
+                    for (const pid of c.formerParticipantIds) this.ctx.activityCache.invalidate(`${c.conversationId}|${pid}`);
                     this.ctx.conversationCache.invalidate(c.conversationId);
-                    const hooks = emitConversationDeleted(this.ctx, c.conversationId, c.formerParticipants, c.deletedInvites);
+                    const hooks = emitConversationDeleted(this.ctx, c.conversationId, c.formerParticipantIds, c.deletedInvites);
                     for (const hook of hooks) await hook();
                 }
             } catch (error) { logError("deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore", error); }

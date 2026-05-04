@@ -142,15 +142,15 @@ export class Subscriptions {
         return [{
             scope: { kind: "conversation" },
             data: { conversationId: conversation.conversationId, data: conversation },
-            targets: conversation.participants,
+            targets: conversation.participantIds,
         }];
     }
 
-    prepareConversationDeleted(conversationId: string, formerParticipants: string[]): PreparedEvent[] {
+    prepareConversationDeleted(conversationId: string, formerParticipantIds: string[]): PreparedEvent[] {
         return [{
             scope: { kind: "conversation" },
             data: { conversationId, data: null },
-            targets: formerParticipants,
+            targets: formerParticipantIds,
         }];
     }
 

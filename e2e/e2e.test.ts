@@ -67,8 +67,8 @@ describe("mixed real-world scenarios", () => {
         // After accept, both see the updated conversation with both participants
         const aliceLast = [...aliceEvents].reverse().find(e => e.conversationId === conversationId);
         const bobLast = [...bobEvents].reverse().find(e => e.conversationId === conversationId);
-        expect(aliceLast?.data?.participants).toEqual(expect.arrayContaining(["alice", "bob"]));
-        expect(bobLast?.data?.participants).toEqual(expect.arrayContaining(["alice", "bob"]));
+        expect(aliceLast?.data?.participantIds).toEqual(expect.arrayContaining(["alice", "bob"]));
+        expect(bobLast?.data?.participantIds).toEqual(expect.arrayContaining(["alice", "bob"]));
 
         // A participantJoined system message was posted for Bob
         expect(aliceMessages.some(m => m.systemEvent?.type === "participantJoined" && m.systemEvent.participantId === "bob")).toBe(true);
@@ -161,6 +161,34 @@ describe("mixed real-world scenarios", () => {
         }
     });
 
+    test("sendMessage from a non-typing participant does not broadcast an unchanged indicator snapshot", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        const indicatorEvents: Indicator[][] = [];
+        await alice.onIndicators(conversationId, indicators => indicatorEvents.push(indicators));
+
+        // Bob never set an indicator, so his sendMessage's implicit removeIndicator should be a no-op
+        await bob.sendMessage(conversationId, "no typing first");
+        await tick();
+        expect(indicatorEvents).toHaveLength(0);
+
+        // For contrast, when bob actually was typing, his sendMessage clears it and the broadcast fires once
+        await bob.setIndicator(conversationId);
+        await tick();
+        const eventsAfterSet = indicatorEvents.length;
+        expect(eventsAfterSet).toBeGreaterThan(0);
+
+        await bob.sendMessage(conversationId, "typed then sent");
+        await tick();
+        const lastSnapshot = indicatorEvents.at(-1);
+        expect(indicatorEvents.length).toBe(eventsAfterSet + 1);
+        expect(lastSnapshot?.find(i => i.participantId === "bob")).toBeUndefined();
+    });
+
     test("leaveConversation posts a system message, cleans up activity, and deletes empty conversations", async () => {
         const alice = transport.addClient("alice");
         const bob = transport.addClient("bob");
@@ -188,7 +216,7 @@ describe("mixed real-world scenarios", () => {
         expect(messages.some(m => m.systemEvent?.type === "participantLeft" && m.systemEvent.participantId === "alice")).toBe(true);
         // Bob's conversation list shows alice is gone
         const bobLast = [...conversationEvents].reverse().find(e => e.conversationId === conversationId && e.data !== null);
-        expect(bobLast?.data?.participants).toEqual(["bob"]);
+        expect(bobLast?.data?.participantIds).toEqual(["bob"]);
         // Alice received a deleted-event for the conversation (data: null)
         expect(aliceConvEvents.some(e => e.conversationId === conversationId && e.data === null)).toBe(true);
         // Alice's participant activity for this conversation is cleaned up
@@ -397,7 +425,7 @@ describe("mixed real-world scenarios", () => {
 
         // Dave is now a participant
         const convs = await dave.getConversations("dave");
-        expect(convs.find(c => c.conversationId === conversationId)?.participants).toEqual(expect.arrayContaining(["alice", "bob", "charlie", "dave"]));
+        expect(convs.find(c => c.conversationId === conversationId)?.participantIds).toEqual(expect.arrayContaining(["alice", "bob", "charlie", "dave"]));
     });
 
     test("rate limits message sends", async () => {
@@ -684,7 +712,7 @@ describe("cache invalidation", () => {
 
         // Pre-condition: cache holds alice-only
         const beforeJoin = transport.conversationCache.get(conversationId);
-        expect(beforeJoin?.participants).toEqual(["alice"]);
+        expect(beforeJoin?.participantIds).toEqual(["alice"]);
 
         transport.store.resetCounts();
         await bob.acceptInvite(conversationId);
@@ -694,7 +722,7 @@ describe("cache invalidation", () => {
 
         // Cached snapshot now reflects bob and matches the DB
         const cached = transport.conversationCache.get(conversationId);
-        expect(cached?.participants).toEqual(expect.arrayContaining(["alice", "bob"]));
+        expect(cached?.participantIds).toEqual(expect.arrayContaining(["alice", "bob"]));
         expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
     });
 
@@ -711,7 +739,7 @@ describe("cache invalidation", () => {
         if (cached) expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
         // The DB must reflect bob's removal
         const fresh = (await alice.getConversations("alice")).find(c => c.conversationId === conversationId);
-        expect(fresh?.participants).toEqual(["alice"]);
+        expect(fresh?.participantIds).toEqual(["alice"]);
     });
 
     test("leaveConversation (auto-delete) invalidates the cache so subsequent reads return null", async () => {
@@ -808,7 +836,7 @@ describe("cache invalidation", () => {
         const conversationId = await alice.createConversation();
 
         // Pre-condition: cache holds alice-only
-        expect(transport.conversationCache.get(conversationId)?.participants).toEqual(["alice"]);
+        expect(transport.conversationCache.get(conversationId)?.participantIds).toEqual(["alice"]);
 
         transport.store.resetCounts();
         // Admin path - bypass invite flow
@@ -817,7 +845,7 @@ describe("cache invalidation", () => {
         // Same in-place patching as acceptInvite
         expect(transport.store.countOf("readConversation")).toBe(0);
         const cached = transport.conversationCache.get(conversationId);
-        expect(cached?.participants).toEqual(expect.arrayContaining(["alice", "bob"]));
+        expect(cached?.participantIds).toEqual(expect.arrayContaining(["alice", "bob"]));
         expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
     });
 
@@ -850,14 +878,14 @@ describe("cache invalidation", () => {
         await bob.acceptInvite(conversationId);
 
         // Pre-condition: cache holds both participants
-        expect(transport.conversationCache.get(conversationId)?.participants).toEqual(expect.arrayContaining(["alice", "bob"]));
+        expect(transport.conversationCache.get(conversationId)?.participantIds).toEqual(expect.arrayContaining(["alice", "bob"]));
 
         await transport.server.deleteParticipant("bob");
 
         const cached = transport.conversationCache.get(conversationId);
         if (cached) expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
         const fresh = (await alice.getConversations("alice")).find(c => c.conversationId === conversationId);
-        expect(fresh?.participants).toEqual(["alice"]);
+        expect(fresh?.participantIds).toEqual(["alice"]);
     });
 
     test("admin deleteParticipant does not affect unrelated cached conversations", async () => {
@@ -876,7 +904,7 @@ describe("cache invalidation", () => {
         await transport.server.deleteParticipant("bob");
 
         const cachedUnrelated = transport.conversationCache.get(unrelated);
-        expect(cachedUnrelated?.participants).toEqual(expect.arrayContaining(["alice", "charlie"]));
+        expect(cachedUnrelated?.participantIds).toEqual(expect.arrayContaining(["alice", "charlie"]));
         expect(transport.store.cachedConversationMatchesDb(unrelated, cachedUnrelated)).toBe(true);
     });
 

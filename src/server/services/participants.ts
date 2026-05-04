@@ -18,18 +18,18 @@ export async function deleteParticipant(ctx: ServerContext, participantId: strin
     return { result: undefined, hooks };
 }
 
-function handleAutoDeleted(ctx: ServerContext, participantId: string, c: { conversationId: string, formerParticipants: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }): AfterHook[] {
-    for (const pid of c.formerParticipants) ctx.activityCache.invalidate(`${c.conversationId}|${pid}`);
+function handleAutoDeleted(ctx: ServerContext, participantId: string, c: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }): AfterHook[] {
+    for (const pid of c.formerParticipantIds) ctx.activityCache.invalidate(`${c.conversationId}|${pid}`);
     ctx.conversationCache.invalidate(c.conversationId);
     return [
-        ...emitConversationDeleted(ctx, c.conversationId, c.formerParticipants, c.deletedInvites),
+        ...emitConversationDeleted(ctx, c.conversationId, c.formerParticipantIds, c.deletedInvites),
         () => fireHook(ctx.handlers, "afterParticipantLeft", c.conversationId, participantId),
     ];
 }
 
-function handleRemaining(ctx: ServerContext, participantId: string, r: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipants: string[], lastMessage: Message | null }): AfterHook[] {
+function handleRemaining(ctx: ServerContext, participantId: string, r: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipantIds: string[], lastMessage: Message | null }): AfterHook[] {
     ctx.activityCache.invalidate(`${r.conversationId}|${participantId}`);
-    const refreshed: Conversation = { ...r.conversationRecord, participants: r.remainingParticipants, lastMessage: r.lastMessage };
+    const refreshed: Conversation = { ...r.conversationRecord, participantIds: r.remainingParticipantIds, lastMessage: r.lastMessage };
     ctx.conversationCache.set(r.conversationId, refreshed);
     // Leaver sees the conversation gone, remaining participants get the refreshed snapshot
     ctx.subscriptions.emit(
