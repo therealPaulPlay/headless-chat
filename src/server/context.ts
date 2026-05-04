@@ -6,13 +6,13 @@ import type { Cache } from "./cache.js";
 import type { Conversation } from "../shared/shared-types.js";
 import { logError } from "../shared/log.js";
 
-// Used for services as a "this.*" replacement so that they don't all need to be on the server class
+// Used for services as a this.* replacement so that they don't all need to be on the server class
 export type ServerContext = {
     handlers: Handlers,
     subscriptions: Subscriptions,
     rateLimiter: RateLimiter,
     rateLimits: ResolvedRateLimits,
-    activityCache: Cache<number>, // Key: `${conversationId}|${participantId}`, Value: lastReadMessageCreatedAt as ms
+    activityCache: Cache<number>, // Key: conversationId}|participantId, Value: lastReadMessageCreatedAt as ms
     conversationCache: Cache<Conversation>, // Key: conversationId, Value: the surfaced Conversation snapshot
     indicators: IndicatorStore,
 }
