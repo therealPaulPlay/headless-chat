@@ -14,6 +14,7 @@ export type RateLimitOptions = {
     inviteLimitPerHour?: number,
     messageLimitPerSecond?: number,
     conversationParticipantLimit?: number,
+    conversationLimitPerParticipant?: number,
     sweepIntervalSeconds?: number,
 }
 
@@ -29,6 +30,7 @@ export type ResolvedRateLimits = {
     inviteLimitPerHour: number,
     messageLimitPerSecond: number,
     conversationParticipantLimit: number,
+    conversationLimitPerParticipant: number,
     sweepIntervalSeconds: number,
 }
 
@@ -43,7 +45,7 @@ export type ResolvedCleanup = {
 export type Handler<Args extends unknown[], R> = (...args: Args) => R | Promise<R>;
 
 export type Handlers = {
-    createConversation?: Handler<[ConversationRecord, string], void>,
+    createConversation?: Handler<[ConversationRecord, string, number], void>, // (record, creatorParticipantId, maxConversationsPerParticipant), throw if creator is at the cap
     createMessage?: Handler<[Message], void>,
     createReaction?: Handler<[Reaction], void>,
     createInvite?: Handler<[Invite], void>,
@@ -62,7 +64,7 @@ export type Handlers = {
     readInvite?: Handler<[string, string, string], Invite | null>, // (conversationId, fromParticipantId, toParticipantId)
     readReaction?: Handler<[string], Reaction | null>,
 
-    addConversationParticipant?: Handler<[string, string, number], void>,
+    addConversationParticipant?: Handler<[string, string, number, number], void>, // (conversationId, participantId, maxParticipants, maxConversationsPerParticipant), throw if either cap exceeded
     removeConversationParticipantAndDeleteParticipantActivity?: Handler<[string, string], void>, // (conversationId, participantId) - atomically remove the participant from the conversation and delete their participant activity row
     updateMessage?: Handler<[Message], void>,
     updateConversationParticipantActivity?: Handler<[ParticipantActivity], void>,

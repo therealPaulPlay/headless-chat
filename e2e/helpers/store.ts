@@ -49,6 +49,12 @@ export class InMemoryStore {
         return this.conversationParticipants.get(conversationId)?.has(participantId) ?? false;
     }
 
+    private countConversationsForParticipant(participantId: string): number {
+        let count = 0;
+        for (const set of this.conversationParticipants.values()) if (set.has(participantId)) count++;
+        return count;
+    }
+
     // Mirrors the consumer's transaction, used by both single-conversation and bulk delete handlers
     // Returns the invite pairs that were deleted so the library can broadcast and fire hooks
     private deleteConversationAndReturnInvites(conversationId: string): { fromParticipantId: string, toParticipantId: string }[] {
@@ -72,9 +78,12 @@ export class InMemoryStore {
 
         // Create handlers -------------------------------------------------------------------
 
-        server.onCreateConversation((record, creatorParticipantId) => {
+        server.onCreateConversation((record, creatorParticipantId, maxConversationsPerParticipant) => {
             this.bump("createConversation");
-            // Atomic in JS, mirrors the consumer's transaction (insert conversation + insert creator seat)
+            // Atomic in JS, mirrors the consumer's transaction (per-participant cap check + insert conversation + insert creator seat)
+            if (this.countConversationsForParticipant(creatorParticipantId) >= maxConversationsPerParticipant) {
+                throw new Error("Per-participant conversation limit exceeded");
+            }
             this.conversations.set(record.conversationId, { ...record });
             this.conversationParticipants.set(record.conversationId, new Set([creatorParticipantId]));
         });
@@ -228,12 +237,15 @@ export class InMemoryStore {
 
         // Update handlers -----------------------------------------------
 
-        server.onAddConversationParticipant((conversationId, participantId, maxParticipants) => {
+        server.onAddConversationParticipant((conversationId, participantId, maxParticipants, maxConversationsPerParticipant) => {
             this.bump("addConversationParticipant");
             const set = this.conversationParticipants.get(conversationId);
             if (!set) throw new Error("Conversation not found");
             if (set.has(participantId)) throw new Error("Already a participant");
             if (set.size >= maxParticipants) throw new Error("Conversation is full");
+            if (this.countConversationsForParticipant(participantId) >= maxConversationsPerParticipant) {
+                throw new Error("Per-participant conversation limit exceeded");
+            }
             set.add(participantId);
         });
         server.onRemoveConversationParticipantAndDeleteParticipantActivity((conversationId, participantId) => {

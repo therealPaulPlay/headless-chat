@@ -107,6 +107,7 @@ An object that configures the rate limiting of key actions the library handles.
     inviteLimitPerHour?: number, // Defaults to 10
     messageLimitPerSecond?: number, // Defaults to 5
     conversationParticipantLimit?: number, // Defaults to 100, acts as the hard global limit that takes precedence over maxSize
+    conversationLimitPerParticipant?: number, // Defaults to 100, max conversations per participant
     sweepIntervalSeconds?: number, // Defaults to 30, sweep that prunes per-participant rate limit state
 }
 ```
@@ -156,7 +157,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 **Create handlers:**
 | Method | Calls with | Description |
 | ------ | ---------- | ------------|
-| onCreateConversation(handler: function) | conversation: ConversationRecord, creatorParticipantId: string | Should atomically (in a single transaction) insert the conversation row and add `creatorParticipantId` as the first participant. |
+| onCreateConversation(handler: function) | conversation: ConversationRecord, creatorParticipantId: string, maxConversationsPerParticipant: number | Should atomically insert the conversation row and add `creatorParticipantId` as the first participant. Throw if the creator is already in `maxConversationsPerParticipant` conversations. |
 | onCreateMessage(handler: function) | message: Message | Atomically create the message and update the conversation's `lastActivityAt` to `message.createdAt`. Guard the insert with a participation check so a participant who concurrently left cannot post, except when `participantId === "server"`, which is the reserved sentinel for system messages and must always be allowed. |
 | onCreateReaction(handler: function) | reaction: Reaction | Create the reaction, replacing any prior reaction by the same `(messageId, participantId)` pair. Guard the insert with a participation check. |
 | onCreateInvite(handler: function) | invite: Invite | Atomically insert the invite, deduplicating on the triple `(conversationId, fromParticipantId, toParticipantId)` (no-op on conflict). If the recipient is already a participant of the conversation, throw. The insert must verify that both `fromParticipantId` and `toParticipantId` exist in your users table. |
@@ -181,7 +182,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 **Update handlers:**
 | Method | Calls with | Description |
 | ------ | ---------- | ------------|
-| onAddConversationParticipant(handler: function) | conversationId: string, participantId: string, maxParticipants: number | Should atomically add the participant only if the current count is below `maxParticipants` and the participant is not already in the conversation. Throw if either condition fails, use a transaction. |
+| onAddConversationParticipant(handler: function) | conversationId: string, participantId: string, maxParticipants: number, maxConversationsPerParticipant: number | Should atomically add the participant only if the conversation has fewer than `maxParticipants`, the participant is not already in it, and the participant is in fewer than `maxConversationsPerParticipant` conversations. Throw if any condition fails. |
 | onRemoveConversationParticipantAndDeleteParticipantActivity(handler: function) | conversationId: string, participantId: string | Should atomically remove the participant from the conversation and delete their participant activity row. |
 | onUpdateMessage(handler: function) | message: Message | Should update the provided message in the database. The `modifiedAt` field is automatically adjusted by the library if the update is an edit. Existing reactions are preserved across edits. |
 | onUpdateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | Should update the provided participant activity in the database. Guard the update with a participation check so activity is not written back for participants who concurrently left the conversation. |

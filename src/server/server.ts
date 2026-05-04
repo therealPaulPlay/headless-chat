@@ -43,6 +43,7 @@ export class Server {
             inviteLimitPerHour: rateLimits.inviteLimitPerHour ?? 10,
             messageLimitPerSecond: rateLimits.messageLimitPerSecond ?? 5,
             conversationParticipantLimit: rateLimits.conversationParticipantLimit ?? 100,
+            conversationLimitPerParticipant: rateLimits.conversationLimitPerParticipant ?? 100,
             sweepIntervalSeconds: rateLimits.sweepIntervalSeconds ?? 30,
         };
         this.cleanup = {
@@ -76,7 +77,7 @@ export class Server {
 
     // Handler registration ----------------------------------------------
 
-    onCreateConversation(handler: Handler<[ConversationRecord, string], void>) { this.handlers.createConversation = handler; }
+    onCreateConversation(handler: Handler<[ConversationRecord, string, number], void>) { this.handlers.createConversation = handler; }
     onCreateMessage(handler: Handler<[Message], void>) { this.handlers.createMessage = handler; }
     onCreateReaction(handler: Handler<[Reaction], void>) { this.handlers.createReaction = handler; }
     onCreateInvite(handler: Handler<[Invite], void>) { this.handlers.createInvite = handler; }
@@ -95,7 +96,7 @@ export class Server {
     onReadInvite(handler: Handler<[string, string, string], Invite | null>) { this.handlers.readInvite = handler; }
     onReadReaction(handler: Handler<[string], Reaction | null>) { this.handlers.readReaction = handler; }
 
-    onAddConversationParticipant(handler: Handler<[string, string, number], void>) { this.handlers.addConversationParticipant = handler; }
+    onAddConversationParticipant(handler: Handler<[string, string, number, number], void>) { this.handlers.addConversationParticipant = handler; }
     onRemoveConversationParticipantAndDeleteParticipantActivity(handler: Handler<[string, string], void>) { this.handlers.removeConversationParticipantAndDeleteParticipantActivity = handler; }
     onUpdateMessage(handler: Handler<[Message], void>) { this.handlers.updateMessage = handler; }
     onUpdateConversationParticipantActivity(handler: Handler<[ParticipantActivity], void>) { this.handlers.updateConversationParticipantActivity = handler; }

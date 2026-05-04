@@ -1388,6 +1388,61 @@ describe("rate limits and capacity caps are per-participant", () => {
             tight.stop();
         }
     });
+
+    test("conversationLimitPerParticipant blocks createConversation past the cap", async () => {
+        const tight = new FakeTransport({ conversationLimitPerParticipant: 2 });
+        try {
+            const alice = tight.addClient("alice");
+            await alice.createConversation();
+            await alice.createConversation();
+            // Alice hit her per-participant cap, the third create rejects
+            await expect(alice.createConversation()).rejects.toThrow(/conversation limit/i);
+        } finally {
+            tight.stop();
+        }
+    });
+
+    test("conversationLimitPerParticipant blocks acceptInvite past the cap", async () => {
+        const tight = new FakeTransport({ conversationLimitPerParticipant: 2 });
+        try {
+            const alice = tight.addClient("alice");
+            const bob = tight.addClient("bob");
+            // Bob fills his cap with two conversations he creates
+            await bob.createConversation();
+            await bob.createConversation();
+            // Alice invites bob to a third conversation, accept rejects
+            const conversationId = await alice.createConversation();
+            await alice.createInvite(conversationId, "bob");
+            await expect(bob.acceptInvite(conversationId)).rejects.toThrow(/conversation limit/i);
+        } finally {
+            tight.stop();
+        }
+    });
+
+    test("admin createConversation also enforces conversationLimitPerParticipant (it's a structural cap and not a throughput limit)", async () => {
+        const tight = new FakeTransport({ conversationLimitPerParticipant: 1 });
+        try {
+            tight.store.users.add("alice");
+            await tight.server.createConversation("alice");
+            await expect(tight.server.createConversation("alice")).rejects.toThrow(/conversation limit/i);
+        } finally {
+            tight.stop();
+        }
+    });
+
+    test("admin joinConversation also enforces conversationLimitPerParticipant", async () => {
+        const tight = new FakeTransport({ conversationLimitPerParticipant: 1 });
+        try {
+            const alice = tight.addClient("alice");
+            const bob = tight.addClient("bob");
+            // Bob fills his cap
+            await bob.createConversation();
+            const conversationId = await alice.createConversation();
+            await expect(tight.server.joinConversation(conversationId, "bob")).rejects.toThrow(/conversation limit/i);
+        } finally {
+            tight.stop();
+        }
+    });
 });
 
 describe("profanity censor", () => {

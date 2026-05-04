@@ -38,8 +38,8 @@ export async function createConversation(ctx: ServerContext, participantId: stri
         lastActivityAt: now(),
         maxSize: maxSize ?? null, // Stored as-is, the global cap is re-applied at every join check
     };
-    // Consumer must atomically insert the conversation row and the creator's participant seat
-    await getHandler(ctx.handlers, "createConversation")(record, participantId);
+    // Consumer must atomically insert the conversation row and the creator's participant seat, throwing if the creator is at the per-participant cap
+    await getHandler(ctx.handlers, "createConversation")(record, participantId, ctx.rateLimits.conversationLimitPerParticipant);
     const surfaced: Conversation = { ...record, participants: [participantId], lastMessage: null };
     ctx.conversationCache.set(conversationId, surfaced);
     ctx.subscriptions.emit(ctx.subscriptions.prepareConversation(surfaced));
@@ -100,7 +100,7 @@ export async function revokeInviteByPair(ctx: ServerContext, conversationId: str
 // Adds the participant atomically, posts the join system message, returns hooks and prepared events for the caller to bundle and emit
 async function joinFlow(ctx: ServerContext, conversationId: string, participantId: string, conversation: Conversation): Promise<{ hooks: AfterHook[], events: PreparedEvent[][] }> {
     const max = effectiveMaxParticipants(conversation.maxSize, ctx.rateLimits.conversationParticipantLimit);
-    await getHandler(ctx.handlers, "addConversationParticipant")(conversationId, participantId, max);
+    await getHandler(ctx.handlers, "addConversationParticipant")(conversationId, participantId, max, ctx.rateLimits.conversationLimitPerParticipant);
     // The participants list changed, force the next read-through to re-fetch
     ctx.conversationCache.invalidate(conversationId);
     // System messages are authored by the reserved "server" participant, the joining participant id is carried in systemEvent
