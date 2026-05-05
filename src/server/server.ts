@@ -191,6 +191,7 @@ export class Server {
             case "removeReaction": return messagesService.removeReaction(this.ctx, participantId, args[0] as string);
             case "getConversations": return gettersService.getConversations(this.ctx, participantId);
             case "getMessages": return gettersService.getMessages(this.ctx, participantId, args[0] as string, args[1] as string | null, args[2] as boolean, args[3] as number);
+            case "getMessage": return gettersService.getMessage(this.ctx, args[0] as string);
             case "getInvites": return gettersService.getInvites(this.ctx, participantId);
             case "getAliases": return gettersService.getAliases(this.ctx, args[0] as string[]);
             case "getParticipantActivities": return gettersService.getParticipantActivities(this.ctx, participantId);

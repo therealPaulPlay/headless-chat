@@ -3017,6 +3017,24 @@ describe("getters", () => {
         expect(charlieInvites.some(i => i.conversation.conversationId === conv2)).toBe(true);
         expect(charlieInvites.some(i => i.conversation.conversationId === conv3)).toBe(true);
     });
+
+    test("getMessage returns the message by id with reactions populated, and null for an unknown id", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        const messageId = await alice.sendMessage(conversationId, "fetch me");
+        await bob.addReaction(messageId, "👍");
+
+        const fetched = await alice.getMessage(messageId);
+        expect(fetched?.messageId).toBe(messageId);
+        expect(fetched?.message).toBe("fetch me");
+        expect(fetched?.reactions.find(r => r.participantId === "bob")?.content).toBe("👍");
+
+        // Unknown id returns null
+        expect(await alice.getMessage("does-not-exist")).toBeNull();
+    });
 });
 
 describe("client API matches documented return types", () => {
