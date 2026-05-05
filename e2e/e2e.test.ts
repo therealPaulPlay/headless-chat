@@ -1799,7 +1799,7 @@ describe("getMessages cursor semantics", () => {
     });
 });
 
-describe("rate limits and capacity caps are per-participant", () => {
+describe("rate limit and capacity cap behaviors", () => {
     test("messageLimitPerSecond is enforced per sender, not globally", async () => {
         const tight = new FakeTransport({ messageLimitPerSecond: 1 });
         try {
@@ -1889,6 +1889,35 @@ describe("rate limits and capacity caps are per-participant", () => {
             await bob.createConversation();
             const conversationId = await alice.createConversation();
             await expect(tight.server.joinConversation(conversationId, "bob")).rejects.toThrow(/conversation limit/i);
+        } finally {
+            tight.stop();
+        }
+    });
+
+    test("the periodic rate-limiter sweep prunes per-participant independently: an expired participant's state is removed while a fresh participant's state survives", async () => {
+        // Tight sweep so the test can advance real time and observe the prune. Use the admin path to add bob, otherwise alice's createInvite would leave a fresh invite entry in alice's state and keep her state alive too
+        const tight = new FakeTransport({ sweepIntervalSeconds: 1, messageLimitPerSecond: 5 });
+        try {
+            const alice = tight.addClient("alice");
+            const bob = tight.addClient("bob");
+            const conversationId = await alice.createConversation();
+            await tight.server.joinConversation(conversationId, "bob");
+
+            // Alice tracks state now and lets it expire, only the message bucket has an entry so the state goes empty after pruning
+            await alice.sendMessage(conversationId, "early");
+            const rateLimiter = (tight.server as unknown as { ctx: { rateLimiter: { states: Map<string, unknown> } } }).ctx.rateLimiter;
+            expect(rateLimiter.states.has("alice")).toBe(true);
+
+            // Wait past the message window (1s), then bob sends right before the next sweep so his state is still fresh
+            await new Promise(resolve => setTimeout(resolve, 1800));
+            await bob.sendMessage(conversationId, "late");
+
+            // Wait for the next sweep tick to fire
+            await new Promise(resolve => setTimeout(resolve, 1100));
+
+            // Alice's empty state was removed, bob's fresh state survives untouched
+            expect(rateLimiter.states.has("alice")).toBe(false);
+            expect(rateLimiter.states.has("bob")).toBe(true);
         } finally {
             tight.stop();
         }
