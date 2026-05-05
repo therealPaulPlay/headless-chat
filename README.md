@@ -65,9 +65,9 @@ A function that takes no parameters and returns `authData: unknown` that is sent
 **Getters:**
 | Method | Returns | Description |
 | ------ | ----------- | ----------- |
-| async getConversations(participantId: string) | conversations: Conversation[] | Get all conversations the participant is in. |
+| async getConversations() | conversations: Conversation[] | Get all conversations the participant is in. |
 | async getMessages(conversationId: string, cursorMessageId: string \| null, after: boolean, amount: number) | { messages: Message[], remainingInDirection: number } | Get up to `amount` messages strictly newer (`after: true`) or strictly older (`after: false`) than the cursor. The cursor message itself is never included. A null cursor returns the newest page. |
-| async getInvites(participantId: string) | invites: Invite[]| Get all invites, both for you and by you. |
+| async getInvites() | invites: Invite[]| Get all invites, both for the participant and by the participant. |
 | async getAliases([participantId: string, participantId...]) | aliases: Alias[] | Get server-defined aliases for participants. This serves as a simple lookup for your server-defined username system. |
 | async getParticipantActivities() | activities: ParticipantActivity[] | Get the calling participant's read state across all their conversations. Used to derive unread counts client-side. |
 
@@ -160,7 +160,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | ------ | ---------- | --------------------- | ------------|
 | onCreateConversation(handler: function) | conversation: ConversationRecord, creatorParticipantId: string, maxConversationsPerParticipant: number | - | Should atomically insert the conversation row and add `creatorParticipantId` as the first participant. Throw if the creator is already in `maxConversationsPerParticipant` conversations. |
 | onCreateMessage(handler: function) | message: Message | - | Atomically create the message and bump the conversation's `lastActivityAt` to `message.createdAt` only if it's newer (e.g. `GREATEST(last_activity_at, ?)` in SQL). Guard the insert with a participation check so a participant who concurrently left cannot post, except when `participantId === "server"`, which is the reserved sentinel for system messages and must always be allowed. |
-| onCreateMessagesSystemRemoved(handler: function) | messages: Message[] | { oldestMessagesByConversationId: Map<string, Message> } | Bulk-insert "messagesRemoved" system messages, one per input message. Skip per-conversation if the conversation's current oldest message is already a "messagesRemoved" system message. For every input conversationId, return its resulting oldest message: the just-inserted one OR the pre-existing system message that caused the skip. No participation check, only called internally. No `lastActivityAt` bump. The library always calls this with at least one message. |
+| onCreateMessagesSystemRemoved(handler: function) | messages: Message[] | { oldestMessagesByConversationId: Map<string, Message> } | Bulk-insert "messagesRemoved" system messages, one per input message. Skip per-conversation if the conversation's current oldest message is already a "messagesRemoved" system message. For every input conversationId, return its resulting oldest message: the just-inserted one or the pre-existing system message that caused the skip. No participation check and no `lastActivityAt` bump. |
 | onCreateReaction(handler: function) | reaction: Reaction | - | Create the reaction, replacing any prior reaction by the same `(messageId, participantId)` pair. Guard the insert with a participation check. |
 | onCreateInvite(handler: function) | invite: Invite | { inserted: boolean } | Atomically insert the invite, deduplicating on the triple `(conversationId, fromParticipantId, toParticipantId)`. Return `inserted: false` on a dedup no-op so the lib can skip the broadcast and `afterInviteCreated` hook. If the recipient is already a participant of the conversation, throw. The insert must verify that both `fromParticipantId` and `toParticipantId` exist in your users table. |
 | onCreateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | - | Should create a participant activity entry in the database. Guard the insert with a participation check so activity is not created for participants who concurrently left the conversation. |
@@ -172,7 +172,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onReadConversation(handler: function) | conversationId: string | conversation: Conversation \| null | Should return the conversation by ID with `lastMessage` populated, or `null` if it does not exist. |
 | onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages ordered by `createdAt` ascending, each with its `reactions` array populated. The cursor message is never included. With `after: true` return strictly newer, with `after: false` strictly older. |
 | onReadMessage(handler: function) | messageId: string | message: Message \| null | Should return the message by ID with reactions populated, or null. |
-| onReadConversationLastMessage(handler: function) | conversationId: string | { messageId: string, createdAt: Date } \| null | Should return the ID and timestamp of the conversation's most recent message, or null if it has none. |
+| onReadConversationLastMessageMetadata(handler: function) | conversationId: string | { messageId: string, createdAt: Date } \| null | Should return the ID and timestamp of the conversation's most recent message, or null if it has none. |
 | onReadReaction(handler: function) | reactionId: string | reaction: Reaction \| null | Should return the reaction by ID, or null. |
 | onReadInvitesInvolvingParticipant(handler: function) | participantId: string | invites: Invite[] | Should return all invites where the participant is the sender or recipient, ordered by `createdAt` descending. |
 | onReadInvitesForRecipient(handler: function) | conversationId: string, toParticipantId: string | invites: Invite[] | Should return all invites the recipient has for the conversation across all senders. |
@@ -214,12 +214,12 @@ Hooks fire after the underlying RPC response has been sent to the client (or aft
 
 | Method | Calls with | Description |
 | ------ | ---------- | ------------|
-| onAfterMessageCreated(handler: function) | message: Message | Fires for both user-sent messages and server-authored system messages. |
-| onAfterMessageDeleted(handler: function) | message: Message | Fires after a soft-delete; `message.deleted` is true. |
-| onAfterParticipantJoined(handler: function) | conversationId: string, participantId: string | Fires after a participant is added (accept-invite or admin join). |
-| onAfterParticipantLeft(handler: function) | conversationId: string, participantId: string | Fires after a participant is removed (leave or admin leave). Also fires when the last participant leaves and the conversation is then deleted. |
+| onAfterMessageCreated(handler: function) | message: Message | Fires after a message was created, including server-authored ones. |
+| onAfterMessageDeleted(handler: function) | message: Message | Fires after a message was marked as deleted (not actually deleted in the database). |
+| onAfterParticipantJoined(handler: function) | conversationId: string, participantId: string | Fires after a participant is added to a conversation. |
+| onAfterParticipantLeft(handler: function) | conversationId: string, participantId: string | Fires after a participant is removed from a conversation. |
 | onAfterInviteCreated(handler: function) | invite: Invite | Fires after a new invite is persisted. |
-| onAfterInviteDeleted(handler: function) | conversationId: string, fromParticipantId: string, toParticipantId: string | Fires after an invite is deleted (revoke, accept, decline, or participant deletion cascade). |
+| onAfterInviteDeleted(handler: function) | conversationId: string, fromParticipantId: string, toParticipantId: string | Fires after an invite is deleted. |
 | onAfterConversationCreated(handler: function) | conversation: Conversation | Fires after a conversation is persisted. |
 | onAfterConversationDeleted(handler: function) | conversationId: string | Fires after the last participant leaves and the conversation is deleted. |
 
@@ -228,7 +228,7 @@ Hooks fire after the underlying RPC response has been sent to the client (or aft
 The `hc` prefix stands for headless-chat. It's suggested to use the following tables:
 `hc_conversations`, `hc_conversation_participants`, `hc_participant_activities`, `hc_messages`, `hc_reactions`, `hc_invites` and, if aliases are configurable, `hc_aliases`. Ensure proper indexing.
 
-Participant IDs are strings and stringified numbers over UUIDs work fine.
+Participant IDs are strings and using stringified numbers over UUIDs work fine.
 
 ## Shared types
 

@@ -207,7 +207,7 @@ export class InMemoryStore {
             return message ? { ...message, reactions: [...message.reactions] } : null;
         });
         server.onReadConversationLastMessage(conversationId => {
-            this.bump("readConversationLastMessage");
+            this.bump("readConversationLastMessageMetadata");
             let latest: Message | null = null;
             for (const message of this.messages.values()) {
                 if (message.conversationId !== conversationId) continue;

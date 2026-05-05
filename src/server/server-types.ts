@@ -64,7 +64,7 @@ export type Handlers = {
     readConversationParticipantActivity?: Handler<[string, string], ParticipantActivity | null>,
     readParticipantActivities?: Handler<[string], ParticipantActivity[]>,
     readMessage?: Handler<[string], Message | null>,
-    readConversationLastMessage?: Handler<[string], { messageId: string, createdAt: Date } | null>,
+    readConversationLastMessageMetadata?: Handler<[string], { messageId: string, createdAt: Date } | null>,
     readConversation?: Handler<[string], Conversation | null>,
     readInvite?: Handler<[string, string, string], Invite | null>, // (conversationId, fromParticipantId, toParticipantId)
     readReaction?: Handler<[string], Reaction | null>,

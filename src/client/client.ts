@@ -169,14 +169,14 @@ export class Client {
 
     // RPC: getters -------------------------------------------------------
 
-    getConversations(participantId: string): Promise<Conversation[]> {
-        return this.request<Conversation[]>("getConversations", [participantId]);
+    getConversations(): Promise<Conversation[]> {
+        return this.request<Conversation[]>("getConversations", []);
     }
     getMessages(conversationId: string, cursorMessageId: string | null, after: boolean, amount: number): Promise<{ messages: Message[], remainingInDirection: number }> {
         return this.request("getMessages", [conversationId, cursorMessageId, after, amount]);
     }
-    getInvites(participantId: string): Promise<Invite[]> {
-        return this.request<Invite[]>("getInvites", [participantId]);
+    getInvites(): Promise<Invite[]> {
+        return this.request<Invite[]>("getInvites", []);
     }
     getAliases(participantIds: string[]): Promise<Alias[]> {
         return this.request<Alias[]>("getAliases", [participantIds]);

@@ -462,7 +462,7 @@ describe("mixed real-world scenarios", () => {
         await dave.createInvite(otherConversationId, "eve");
 
         // Pre-condition: dave has two distinct invites for the target conversation
-        const davesInvitesBeforeAccept = await dave.getInvites("dave");
+        const davesInvitesBeforeAccept = await dave.getInvites();
         const forConversation = davesInvitesBeforeAccept.filter(i => i.conversation.conversationId === conversationId);
         expect(forConversation).toHaveLength(2);
         expect(forConversation.map(i => i.fromParticipantId).sort()).toEqual(["bob", "charlie"]);
@@ -489,7 +489,7 @@ describe("mixed real-world scenarios", () => {
         expect(charlieInviteEvents.some(e => e.conversationId === conversationId && e.toParticipantId === "dave" && e.data === null)).toBe(true);
 
         // Dave is now a participant
-        const convs = await dave.getConversations("dave");
+        const convs = await dave.getConversations();
         expect(convs.find(c => c.conversationId === conversationId)?.participantIds).toEqual(expect.arrayContaining(["alice", "bob", "charlie", "dave"]));
     });
 
@@ -563,7 +563,7 @@ describe("cache invalidation", () => {
 
         // Drop the cache so we observe the warming effect of getConversations
         transport.conversationCache.invalidate(conversationId);
-        await alice.getConversations("alice");
+        await alice.getConversations();
 
         const cached = transport.conversationCache.get(conversationId);
         expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
@@ -803,7 +803,7 @@ describe("cache invalidation", () => {
         const cached = transport.conversationCache.get(conversationId);
         if (cached) expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
         // The DB must reflect bob's removal
-        const fresh = (await alice.getConversations("alice")).find(c => c.conversationId === conversationId);
+        const fresh = (await alice.getConversations()).find(c => c.conversationId === conversationId);
         expect(fresh?.participantIds).toEqual(["alice"]);
     });
 
@@ -949,7 +949,7 @@ describe("cache invalidation", () => {
 
         const cached = transport.conversationCache.get(conversationId);
         if (cached) expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
-        const fresh = (await alice.getConversations("alice")).find(c => c.conversationId === conversationId);
+        const fresh = (await alice.getConversations()).find(c => c.conversationId === conversationId);
         expect(fresh?.participantIds).toEqual(["alice"]);
     });
 
@@ -1548,6 +1548,84 @@ describe("error handling", () => {
             // Force bad auth on the next request
             (alice as unknown as { getAuthData: () => unknown }).getAuthData = () => "wrong-token";
             await expect(alice.createConversation()).rejects.toThrow(/Unauthorized/);
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("an unknown RPC method received from the wire is rejected with 'Unknown method' rather than crashing the server (consumers integrating custom transports may forward malformed payloads)", async () => {
+        // Custom dispatch captures responses sent back to alice so we can assert what the server replied
+        const responses: { ok: boolean, error?: string }[] = [];
+        const server = new (await import("../src/server/server.js")).Server((participantId, data) => {
+            if (participantId === "alice" && (data as { type?: string }).type === "response") {
+                responses.push(data as { ok: boolean, error?: string });
+            }
+        });
+        try {
+            const store = new (await import("./helpers/store.js")).InMemoryStore();
+            store.register(server);
+            store.users.add("alice");
+            server.onParticipantAuth(() => true);
+
+            // Hand-craft an envelope with a method the server doesn't know about
+            await server.receive({ type: "request", participantId: "alice", authData: null, requestId: "r1", method: "doesNotExist", args: [] });
+
+            // The server responded with an error referencing the unknown method, did not throw or crash
+            const r = responses.find(x => !x.ok);
+            expect(r).toBeTruthy();
+            expect(r?.error).toMatch(/Unknown method/i);
+
+            // Server is still healthy: a subsequent legitimate request resolves successfully
+            await server.receive({ type: "request", participantId: "alice", authData: null, requestId: "r2", method: "createConversation", args: [] });
+            const ok = responses.find(x => x.ok);
+            expect(ok).toBeTruthy();
+        } finally {
+            server.stop();
+        }
+    });
+
+    test("inviteAuth handler that throws rejects the createInvite RPC with 'Invite check failed', symmetric to the participantAuth", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            transport.addClient("bob");
+            const conversationId = await alice.createConversation();
+
+            transport.server.onInviteAuth(() => { throw new Error("inviteAuth blew up"); });
+
+            await expect(alice.createInvite(conversationId, "bob")).rejects.toThrow(/Invite check failed/i);
+            expect(transport.store.invites).toHaveLength(0);
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("onProfanityCheckCensor handler that throws rejects the sendMessage RPC with 'Profanity check failed' and persists nothing", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            const conversationId = await alice.createConversation();
+
+            transport.server.onProfanityCheckCensor(() => { throw new Error("censor blew up"); });
+
+            await expect(alice.sendMessage(conversationId, "anything")).rejects.toThrow(/Profanity check failed/i);
+            // Only the participantJoined system message exists - no user-authored message persisted
+            expect([...transport.store.messages.values()].some(m => m.conversationId === conversationId && m.systemEvent === null)).toBe(false);
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("onProfanityCheckBlock handler that throws rejects the sendMessage RPC with 'Profanity check failed' and persists nothing", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            const conversationId = await alice.createConversation();
+
+            transport.server.onProfanityCheckBlock(() => { throw new Error("block blew up"); });
+
+            await expect(alice.sendMessage(conversationId, "anything")).rejects.toThrow(/Profanity check failed/i);
+            expect([...transport.store.messages.values()].some(m => m.conversationId === conversationId && m.systemEvent === null)).toBe(false);
         } finally {
             transport.stop();
         }
@@ -2515,6 +2593,79 @@ describe("message validation and authorization", () => {
         const cached = transport.conversationCache.get(conversationId);
         expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
     });
+
+    test("sendMessage starts with modifiedAt: null and editMessage advances modifiedAt to a fresh Date on every successful edit", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+        const messageId = await alice.sendMessage(conversationId, "v1");
+
+        // Fresh send: not modified yet
+        expect(transport.store.messages.get(messageId)?.modifiedAt).toBeNull();
+
+        await alice.editMessage(messageId, "v2");
+        const afterFirst = transport.store.messages.get(messageId)?.modifiedAt;
+        expect(afterFirst instanceof Date).toBe(true);
+
+        // Yield real time so the second edit's now() lands strictly later
+        await new Promise(resolve => setTimeout(resolve, 5));
+
+        await alice.editMessage(messageId, "v3");
+        const afterSecond = transport.store.messages.get(messageId)?.modifiedAt;
+        expect(afterSecond instanceof Date).toBe(true);
+        expect(afterSecond!.getTime()).toBeGreaterThan(afterFirst!.getTime());
+    });
+
+    test("editMessage does not change createdAt: the row's original creation timestamp survives across edits", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+        const messageId = await alice.sendMessage(conversationId, "original");
+        const originalCreatedAt = transport.store.messages.get(messageId)?.createdAt;
+        expect(originalCreatedAt instanceof Date).toBe(true);
+
+        // Yield real time so a buggy implementation that resets createdAt would produce a strictly different value
+        await new Promise(resolve => setTimeout(resolve, 5));
+
+        await alice.editMessage(messageId, "edited");
+
+        const afterEdit = transport.store.messages.get(messageId)?.createdAt;
+        expect(afterEdit?.getTime()).toBe(originalCreatedAt!.getTime());
+    });
+
+    test("addReaction surfaces a Reaction.createdAt that is a Date and reflects the time of the call", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+        const messageId = await alice.sendMessage(conversationId, "react to me");
+
+        const before = Date.now();
+        const reactionId = await alice.addReaction(messageId, "👍");
+        const after = Date.now();
+
+        const reaction = transport.store.reactions.get(reactionId);
+        expect(reaction?.createdAt instanceof Date).toBe(true);
+        const ts = reaction?.createdAt.getTime() ?? 0;
+        expect(ts).toBeGreaterThanOrEqual(before);
+        expect(ts).toBeLessThanOrEqual(after);
+    });
+
+    test("deleteMessage of the conversation's last message tombstones the row but does not regress the conversation's lastActivityAt", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+        const messageId = await alice.sendMessage(conversationId, "last message");
+
+        const lastActivityBefore = transport.store.conversations.get(conversationId)?.lastActivityAt.getTime();
+        expect(lastActivityBefore).toBeTruthy();
+
+        await alice.deleteMessage(messageId);
+
+        // Tombstone is in place
+        expect(transport.store.messages.get(messageId)?.deleted).toBe(true);
+        // lastActivityAt is unchanged - the tombstone is not a new activity event
+        const lastActivityAfter = transport.store.conversations.get(conversationId)?.lastActivityAt.getTime();
+        expect(lastActivityAfter).toBe(lastActivityBefore);
+        // Cache stays in sync with the DB across the tombstone
+        const cached = transport.conversationCache.get(conversationId);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+    });
 });
 
 describe("client invite paths", () => {
@@ -2618,6 +2769,57 @@ describe("client invite paths", () => {
         // "ghost" is not registered as a user (transport.addClient also adds the user to the store, but we skip that)
         await expect(alice.createInvite(conversationId, "ghost")).rejects.toThrow(/Participant does not exist/i);
         expect(transport.store.invites).toHaveLength(0);
+    });
+});
+
+describe("event ordering and subscription guarantees", () => {
+    let transport: FakeTransport;
+
+    beforeEach(() => { transport = new FakeTransport(); });
+    afterEach(() => { transport.stop(); });
+
+    test("an event that fires between a fetch and a later subscribe is missed by that subscriber", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Bob fetches first
+        await bob.getConversations();
+
+        // Between the fetch and the subscribe, alice produces a conversation update
+        await alice.sendMessage(conversationId, "between fetch and subscribe");
+        await tick();
+
+        // Bob subscribes after - the earlier update has already fanned out and is not replayed
+        const conversationEvents: { conversationId: string, data: Conversation | null }[] = [];
+        await bob.onConversation(e => conversationEvents.push(e));
+        await tick();
+
+        expect(conversationEvents.some(e => e.conversationId === conversationId && e.data?.lastMessage?.message === "between fetch and subscribe")).toBe(false);
+    });
+
+    test("subscribing before fetching captures the event via the live subscription AND surfaces it in the fetched snapshot", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Bob subscribes first
+        const conversationEvents: { conversationId: string, data: Conversation | null }[] = [];
+        await bob.onConversation(e => conversationEvents.push(e));
+
+        // Alice's sendMessage resolves before bob's getConversations starts, so the new lastMessage is durably persisted by the time bob fetches
+        await alice.sendMessage(conversationId, "during fetch");
+        const fetched = await bob.getConversations();
+        await tick();
+
+        // Live subscription delivered the update
+        expect(conversationEvents.some(e => e.conversationId === conversationId && e.data?.lastMessage?.message === "during fetch")).toBe(true);
+        // Fetched snapshot reflects the same update
+        expect(fetched.some(c => c.conversationId === conversationId && c.lastMessage?.message === "during fetch")).toBe(true);
     });
 });
 
@@ -2794,7 +2996,7 @@ describe("getters", () => {
         const conv3 = await alice.createConversation();
         await alice.createInvite(conv3, "charlie");
 
-        const bobInvites = await bob.getInvites("bob");
+        const bobInvites = await bob.getInvites();
 
         // Return shape: an Invite[] with conversation, fromParticipantId, toParticipantId, createdAt
         expect(Array.isArray(bobInvites)).toBe(true);
@@ -2811,7 +3013,7 @@ describe("getters", () => {
         // Bob does not see the unrelated alice -> charlie invite
         expect(bobInvites.some(i => i.conversation.conversationId === conv3)).toBe(false);
         // Sanity: charlie sees the inverse - the bob -> charlie invite (as recipient) and the alice -> charlie invite (as recipient)
-        const charlieInvites = await charlie.getInvites("charlie");
+        const charlieInvites = await charlie.getInvites();
         expect(charlieInvites.some(i => i.conversation.conversationId === conv2)).toBe(true);
         expect(charlieInvites.some(i => i.conversation.conversationId === conv3)).toBe(true);
     });
@@ -2889,7 +3091,7 @@ describe("client API documented return types", () => {
         const conversationId = await alice.createConversation();
         await alice.sendMessage(conversationId, "first");
 
-        const conversations = await alice.getConversations("alice");
+        const conversations = await alice.getConversations();
         expect(Array.isArray(conversations)).toBe(true);
         const found = conversations.find(c => c.conversationId === conversationId);
         expect(found).toBeTruthy();
@@ -2993,6 +3195,18 @@ describe("message options round-trip", () => {
         expect(stored?.messageOptions.referenceMessageId).toBe(originalId);
         expect(stored?.messageOptions.isForwarded).toBe(true);
     });
+
+    test("sendMessage with no options argument defaults messageOptions to { referenceMessageId: null, isForwarded: false }", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+
+        // No third argument - normalizeOptions fills in the defaults
+        const messageId = await alice.sendMessage(conversationId, "no options passed");
+
+        const stored = transport.store.messages.get(messageId);
+        expect(stored?.messageOptions.referenceMessageId).toBeNull();
+        expect(stored?.messageOptions.isForwarded).toBe(false);
+    });
 });
 
 describe("indicators", () => {
@@ -3059,6 +3273,33 @@ describe("indicators", () => {
         await tick();
 
         expect(seen.length).toBe(before);
+    });
+
+    test("removeIndicator clears only the caller's own indicator, not anyone else's typing state in the same conversation", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const charlie = transport.addClient("charlie");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Both alice and bob are typing
+        await alice.setIndicator(conversationId);
+        await bob.setIndicator(conversationId);
+
+        const seen: Indicator[][] = [];
+        await alice.createInvite(conversationId, "charlie");
+        await charlie.acceptInvite(conversationId);
+        await charlie.onIndicators(conversationId, indicators => seen.push(indicators));
+        await tick();
+
+        // Alice removes her own indicator, Bob's must remain
+        await alice.removeIndicator(conversationId);
+        await tick();
+
+        const latest = seen.at(-1);
+        expect(latest?.some(i => i.participantId === "alice")).toBe(false);
+        expect(latest?.some(i => i.participantId === "bob")).toBe(true);
     });
 });
 
@@ -3130,6 +3371,27 @@ describe("join, leave, and accept guards", () => {
         // Bob has no invite to alice's conversation
         await expect(bob.acceptInvite(conversationId)).rejects.toThrow();
         expect(transport.store.conversationParticipants.get(conversationId)?.has("bob")).toBe(false);
+    });
+
+    test("sendMessage from a non-participant is rejected by the consumer's onCreateMessage participation guard, the rejection propagates as a rejected RPC, and no message is persisted or broadcast", async () => {
+        const alice = transport.addClient("alice");
+        const charlie = transport.addClient("charlie");
+        const conversationId = await alice.createConversation();
+
+        // Alice subscribes so we can detect any spurious broadcast from the rejected send
+        const messages: Message[] = [];
+        await alice.onMessage(conversationId, m => messages.push(m));
+        await tick();
+        const beforeMessageCount = messages.length;
+        const beforeDbMessages = transport.store.messages.size;
+
+        // Charlie is not a participant of alice's conversation
+        await expect(charlie.sendMessage(conversationId, "smuggled in")).rejects.toThrow(/Not a participant/i);
+        await tick();
+
+        expect(transport.store.messages.size).toBe(beforeDbMessages);
+        expect(messages.length).toBe(beforeMessageCount);
+        expect([...transport.store.messages.values()].some(m => m.participantId === "charlie")).toBe(false);
     });
 });
 
@@ -3304,7 +3566,7 @@ describe("database call counts sanity checks", () => {
 
         // Each participant catches up: list conversations + read the message page + mark activity
         for (const client of [alice, bob, charlie]) {
-            await client.getConversations(client === alice ? "alice" : client === bob ? "bob" : "charlie");
+            await client.getConversations();
             await client.getMessages(conversationId, null, false, 20);
         }
 

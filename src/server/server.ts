@@ -94,7 +94,7 @@ export class Server {
     onReadConversationParticipantActivity(handler: Handler<[string, string], ParticipantActivity | null>) { this.handlers.readConversationParticipantActivity = handler; }
     onReadParticipantActivities(handler: Handler<[string], ParticipantActivity[]>) { this.handlers.readParticipantActivities = handler; }
     onReadMessage(handler: Handler<[string], Message | null>) { this.handlers.readMessage = handler; }
-    onReadConversationLastMessage(handler: Handler<[string], { messageId: string, createdAt: Date } | null>) { this.handlers.readConversationLastMessage = handler; }
+    onReadConversationLastMessage(handler: Handler<[string], { messageId: string, createdAt: Date } | null>) { this.handlers.readConversationLastMessageMetadata = handler; }
     onReadConversation(handler: Handler<[string], Conversation | null>) { this.handlers.readConversation = handler; }
     onReadInvite(handler: Handler<[string, string, string], Invite | null>) { this.handlers.readInvite = handler; }
     onReadReaction(handler: Handler<[string], Reaction | null>) { this.handlers.readReaction = handler; }
@@ -189,9 +189,9 @@ export class Server {
             case "deleteMessage": return messagesService.deleteMessage(this.ctx, participantId, args[0] as string);
             case "addReaction": return messagesService.addReaction(this.ctx, participantId, args[0] as string, args[1] as string);
             case "removeReaction": return messagesService.removeReaction(this.ctx, participantId, args[0] as string);
-            case "getConversations": return gettersService.getConversations(this.ctx, args[0] as string);
+            case "getConversations": return gettersService.getConversations(this.ctx, participantId);
             case "getMessages": return gettersService.getMessages(this.ctx, participantId, args[0] as string, args[1] as string | null, args[2] as boolean, args[3] as number);
-            case "getInvites": return gettersService.getInvites(this.ctx, args[0] as string);
+            case "getInvites": return gettersService.getInvites(this.ctx, participantId);
             case "getAliases": return gettersService.getAliases(this.ctx, args[0] as string[]);
             case "getParticipantActivities": return gettersService.getParticipantActivities(this.ctx, participantId);
             default: throw new Error(`Unknown method: ${method}`);

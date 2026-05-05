@@ -69,7 +69,7 @@ export class Subscriptions {
         if (scope.kind === "message") {
             const conversationId = scope.conversationId;
             (async () => {
-                const lastMessage = await getHandler(this.handlers, "readConversationLastMessage")(conversationId);
+                const lastMessage = await getHandler(this.handlers, "readConversationLastMessageMetadata")(conversationId);
                 if (!lastMessage) return; // Empty conversation, exit
                 await checkUpdateActivity(this.ctx, conversationId, participantId, [lastMessage]);
             })().catch(error => logError("markConversationRead", error));
