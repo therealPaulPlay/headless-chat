@@ -1632,7 +1632,7 @@ describe("error handling", () => {
     });
 });
 
-describe("cleanup broadcasts", () => {
+describe("scheduled cleanup", () => {
     async function runDaily(transport: FakeTransport): Promise<void> {
         await (transport.server as unknown as { scheduler: { runDaily: () => Promise<void> } }).scheduler.runDaily();
         await tick();
@@ -3019,7 +3019,7 @@ describe("getters", () => {
     });
 });
 
-describe("client API documented return types", () => {
+describe("client API matches documented return types", () => {
     let transport: FakeTransport;
 
     beforeEach(() => { transport = new FakeTransport(); });
@@ -3136,7 +3136,7 @@ describe("client API documented return types", () => {
     });
 });
 
-describe("message options round-trip", () => {
+describe("message options structure", () => {
     let transport: FakeTransport;
 
     beforeEach(() => { transport = new FakeTransport(); });
