@@ -160,8 +160,8 @@ export class Client {
     deleteMessage(messageId: string): Promise<void> {
         return this.request<void>("deleteMessage", [messageId]);
     }
-    addReaction(messageId: string, reaction: string): Promise<void> {
-        return this.request<void>("addReaction", [messageId, reaction]);
+    addReaction(messageId: string, reaction: string): Promise<string> {
+        return this.request<string>("addReaction", [messageId, reaction]);
     }
     removeReaction(reactionId: string): Promise<void> {
         return this.request<void>("removeReaction", [reactionId]);

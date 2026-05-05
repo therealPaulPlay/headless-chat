@@ -113,7 +113,7 @@ export async function deleteMessage(ctx: ServerContext, participantId: string, m
     return { result: undefined, hooks: [() => fireHook(ctx.handlers, "afterMessageDeleted", tombstoned)] };
 }
 
-export async function addReaction(ctx: ServerContext, participantId: string, messageId: string, content: string): Promise<ServiceResult<void>> {
+export async function addReaction(ctx: ServerContext, participantId: string, messageId: string, content: string): Promise<ServiceResult<string>> {
     if (!isValidEmoji(content)) throw new Error("Reaction must be a valid unicode emoji");
     const existing = await getHandler(ctx.handlers, "readMessage")(messageId);
     if (!existing) throw new Error("Message not found");
@@ -138,7 +138,7 @@ export async function addReaction(ctx: ServerContext, participantId: string, mes
     }
     // Emit the locally constructed updated message rather than re-reading it
     ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(updated));
-    return { result: undefined, hooks: [] };
+    return { result: reaction.reactionId, hooks: [] };
 }
 
 export async function removeReaction(ctx: ServerContext, participantId: string, reactionId: string): Promise<ServiceResult<void>> {

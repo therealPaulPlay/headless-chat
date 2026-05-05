@@ -53,7 +53,7 @@ export type Handlers = {
     createMessage?: Handler<[Message], void>,
     createMessagesSystemRemoved?: Handler<[Message[]], { oldestMessagesByConversationId: Map<string, Message> }>, // Bulk-insert "messagesRemoved" system messages, dedup per-conversation against the current oldest, return each conversation's resulting oldest (just-inserted or pre-existing), always called with at least one message
     createReaction?: Handler<[Reaction], void>,
-    createInvite?: Handler<[Invite], void>,
+    createInvite?: Handler<[Invite], { inserted: boolean }>, // Return inserted: false when the triple already exists (dedup no-op), so the lib can skip the broadcast and the afterInviteCreated hook
     createConversationParticipantActivity?: Handler<[ParticipantActivity], void>,
 
     readConversations?: Handler<[string], Conversation[]>,

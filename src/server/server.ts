@@ -83,7 +83,7 @@ export class Server {
     onCreateMessage(handler: Handler<[Message], void>) { this.handlers.createMessage = handler; }
     onCreateMessagesSystemRemoved(handler: Handler<[Message[]], { oldestMessagesByConversationId: Map<string, Message> }>) { this.handlers.createMessagesSystemRemoved = handler; }
     onCreateReaction(handler: Handler<[Reaction], void>) { this.handlers.createReaction = handler; }
-    onCreateInvite(handler: Handler<[Invite], void>) { this.handlers.createInvite = handler; }
+    onCreateInvite(handler: Handler<[Invite], { inserted: boolean }>) { this.handlers.createInvite = handler; }
     onCreateConversationParticipantActivity(handler: Handler<[ParticipantActivity], void>) { this.handlers.createConversationParticipantActivity = handler; }
 
     onReadConversations(handler: Handler<[string], Conversation[]>) { this.handlers.readConversations = handler; }

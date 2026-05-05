@@ -62,7 +62,10 @@ export class InMemoryStore {
         const deletedInvites = invitesForConversation.map(i => ({ fromParticipantId: i.fromParticipantId, toParticipantId: i.toParticipantId }));
 
         for (const [id, message] of this.messages) {
-            if (message.conversationId === conversationId) this.messages.delete(id);
+            if (message.conversationId === conversationId) {
+                for (const r of message.reactions) this.reactions.delete(r.reactionId);
+                this.messages.delete(id);
+            }
         }
         this.invites = this.invites.filter(i => i.conversation.conversationId !== conversationId);
         for (const [key, activity] of this.activities) {
@@ -122,9 +125,11 @@ export class InMemoryStore {
             const message = this.messages.get(reaction.messageId);
             if (!message) throw new Error("Message not found");
             if (!this.isParticipant(message.conversationId, reaction.participantId)) throw new Error("Not a participant");
-            // Spec: one reaction per (messageId, participantId) - replace any prior reaction by this participant on this message
+            // Spec: one reaction per (messageId, participantId) - drop any prior reaction by this participant on this message from both the nested list and the top-level map
+            for (const prior of message.reactions.filter(r => r.participantId === reaction.participantId)) this.reactions.delete(prior.reactionId);
             message.reactions = message.reactions.filter(r => r.participantId !== reaction.participantId);
             message.reactions.push({ ...reaction });
+            this.reactions.set(reaction.reactionId, { ...reaction });
         });
         server.onCreateInvite(invite => {
             this.bump("createInvite");
@@ -143,8 +148,9 @@ export class InMemoryStore {
                 i.conversation.conversationId === conversationId
                 && i.fromParticipantId === invite.fromParticipantId
                 && i.toParticipantId === invite.toParticipantId);
-            if (existing) return;
+            if (existing) return { inserted: false };
             this.invites.push({ ...invite });
+            return { inserted: true };
         });
         server.onCreateConversationParticipantActivity(activity => {
             this.bump("createConversationParticipantActivity");
@@ -312,6 +318,7 @@ export class InMemoryStore {
 
         server.onDeleteReaction(reactionId => {
             this.bump("deleteReaction");
+            this.reactions.delete(reactionId);
             for (const message of this.messages.values()) {
                 const idx = message.reactions.findIndex(r => r.reactionId === reactionId);
                 if (idx >= 0) { message.reactions.splice(idx, 1); return; }
@@ -335,6 +342,7 @@ export class InMemoryStore {
             for (const [id, m] of this.messages) {
                 if (m.createdAt.getTime() < thresholdDate.getTime()) {
                     affected.add(m.conversationId);
+                    for (const r of m.reactions) this.reactions.delete(r.reactionId);
                     this.messages.delete(id);
                 }
             }
