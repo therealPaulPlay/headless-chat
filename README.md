@@ -232,6 +232,8 @@ The `hc` prefix stands for headless-chat. It's suggested to use the following ta
 
 Participant IDs are strings and using stringified numbers over UUIDs work fine.
 
+Timestamp columns must preserve sub-second precision (e.g. MySQL `DATETIME(3)`) since rounding to whole seconds will desync `onParticipantActivity` events from the persisted entries.
+
 ## Shared types
 
 #### ConversationRecord

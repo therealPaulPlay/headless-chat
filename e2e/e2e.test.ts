@@ -769,6 +769,40 @@ describe("mixed real-world scenarios", () => {
 
         expect(convEvents.slice(initialLen).filter(e => e.conversationId === conversationId)).toHaveLength(0);
     });
+
+    // Both online with the conversation open, alice sends two messages, bob reacts to each
+    // After all events settle bob's local lastReadMessageCreatedAt must cover the conversation's lastMessage.createdAt
+    // Otherwise the consumer's hasUnread check (lastMessage.createdAt > lastReadMessageCreatedAt) flags the conversation as "New"
+    test("alice sends two, bob reacts to each while both have the conversation open, bob's view is not flagged as unread", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        const bobConversations = new Map<string, Conversation>();
+        const bobActivities = new Map<string, ParticipantActivity>();
+        await bob.onConversation(e => { if (e.data) bobConversations.set(e.conversationId, e.data); });
+        await bob.onParticipantActivity(e => { if (e.data) bobActivities.set(e.conversationId, e.data); });
+        await alice.onMessage(conversationId, () => { });
+        await bob.onMessage(conversationId, () => { });
+
+        const messageId1 = await alice.sendMessage(conversationId, "first");
+        await new Promise(r => setTimeout(r, 5));
+        const messageId2 = await alice.sendMessage(conversationId, "second");
+        await tick();
+
+        await bob.addReaction(messageId1, "👍");
+        await tick();
+        await bob.addReaction(messageId2, "❤️");
+        await tick();
+
+        const convSnapshot = bobConversations.get(conversationId);
+        const activitySnapshot = bobActivities.get(conversationId);
+        expect(convSnapshot?.lastMessage?.messageId).toBe(messageId2);
+        expect(activitySnapshot?.lastReadMessageId).toBe(messageId2);
+        expect(convSnapshot!.lastMessage!.createdAt.getTime()).toBeLessThanOrEqual(activitySnapshot!.lastReadMessageCreatedAt.getTime());
+    });
 });
 
 describe("cache invalidation", () => {
