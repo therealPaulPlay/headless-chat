@@ -1199,6 +1199,175 @@ describe("admin functions", () => {
         expect(transport.store.messages.get(messageId)?.systemEvent?.type).toBe("participantJoined");
         expect(transport.store.messages.get(messageId)?.participantId).toBe("server");
     });
+
+    test("deleteParticipant bypasses participantAuth, removes the participant from all conversations, deletes their invites in both directions, and keeps their messages", async () => {
+        transport.store.users.add("alice");
+        transport.store.users.add("bob");
+        transport.store.users.add("charlie");
+
+        // Bob is in two conversations and authored messages in each
+        const sharedId = await transport.server.createConversation("alice");
+        await transport.server.joinConversation(sharedId, "bob");
+        const sharedMessageId = await transport.server.sendMessage(sharedId, "bob", "from bob in shared");
+
+        const otherId = await transport.server.createConversation("charlie");
+        await transport.server.joinConversation(otherId, "bob");
+        const otherMessageId = await transport.server.sendMessage(otherId, "bob", "from bob in other");
+
+        // Outstanding invites both as recipient (alice -> bob) and as sender (bob -> charlie in a third conversation)
+        const inviteToBobConversationId = await transport.server.createConversation("alice");
+        await transport.server.createInvite(inviteToBobConversationId, "alice", "bob");
+        const inviteFromBobConversationId = await transport.server.createConversation("bob");
+        await transport.server.createInvite(inviteFromBobConversationId, "bob", "charlie");
+
+        await transport.server.deleteParticipant("bob");
+
+        // Removed from every conversation he was in
+        expect(transport.store.conversationParticipants.get(sharedId)?.has("bob")).toBe(false);
+        expect(transport.store.conversationParticipants.get(otherId)?.has("bob")).toBe(false);
+        // Other participants remain in the shared conversations
+        expect(transport.store.conversationParticipants.get(sharedId)?.has("alice")).toBe(true);
+        expect(transport.store.conversationParticipants.get(otherId)?.has("charlie")).toBe(true);
+
+        // Invites in both directions are gone
+        expect(transport.store.invites.some(i => i.toParticipantId === "bob" || i.fromParticipantId === "bob")).toBe(false);
+
+        // Messages bob authored stick around
+        expect(transport.store.messages.get(sharedMessageId)?.participantId).toBe("bob");
+        expect(transport.store.messages.get(otherMessageId)?.participantId).toBe("bob");
+    });
+
+    test("cleanupParticipant drops all server-side subscriptions so subsequent events of every scope no longer dispatch to the participant", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        // Re-allow auth so the clients can actually subscribe (the describe-level handler rejects everyone)
+        transport.server.onParticipantAuth(() => true);
+        transport.addClient("charlie");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Bob subscribes to every scope the library exposes
+        const messages: Message[] = [];
+        const indicators: Indicator[][] = [];
+        const conversations: { conversationId: string, data: Conversation | null }[] = [];
+        const invites: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+        const activities: { conversationId: string, data: ParticipantActivity | null }[] = [];
+        await bob.onMessage(conversationId, m => messages.push(m));
+        await bob.onIndicators(conversationId, i => indicators.push(i));
+        await bob.onConversation(e => conversations.push(e));
+        await bob.onInvite(e => invites.push(e));
+        await bob.onParticipantActivity(e => activities.push(e));
+
+        // Sanity: live events reach bob before cleanup
+        await alice.setIndicator(conversationId);
+        await alice.sendMessage(conversationId, "before cleanup");
+        await tick();
+        expect(messages.length).toBeGreaterThan(0);
+        expect(indicators.length).toBeGreaterThan(0);
+        expect(conversations.length).toBeGreaterThan(0);
+        expect(activities.length).toBeGreaterThan(0);
+
+        const before = {
+            messages: messages.length,
+            indicators: indicators.length,
+            conversations: conversations.length,
+            invites: invites.length,
+            activities: activities.length,
+        };
+
+        transport.server.cleanupParticipant("bob");
+        await tick();
+
+        // Trigger one event of each scope: message, indicator, conversation update (via accept), invite (fresh recipient)
+        await alice.sendMessage(conversationId, "after cleanup");
+        await alice.setIndicator(conversationId);
+        await alice.createInvite(conversationId, "charlie");
+        await tick();
+
+        expect(messages.length).toBe(before.messages);
+        expect(indicators.length).toBe(before.indicators);
+        expect(conversations.length).toBe(before.conversations);
+        expect(invites.length).toBe(before.invites);
+        expect(activities.length).toBe(before.activities);
+    });
+
+    test("admin leaveConversation of the last participant auto-deletes the conversation and cascades to messages, reactions, invites, and activities", async () => {
+        transport.store.users.add("alice");
+        transport.store.users.add("bob");
+        const conversationId = await transport.server.createConversation("alice");
+
+        // Outstanding invite + message + reaction + activity so we have something to cascade-delete
+        await transport.server.createInvite(conversationId, "alice", "bob");
+        const messageId = await transport.server.sendMessage(conversationId, "alice", "hello");
+        // Use the client path for the reaction since admin sendMessage is what we have, but reactions are client-only - fall back to direct store seeding via the alice client
+        const alice = transport.addClient("alice");
+        transport.server.onParticipantAuth(() => true); // describe-level handler rejects, re-allow for client path
+        await alice.addReaction(messageId, "👍");
+        await alice.getMessages(conversationId, null, false, 10);
+        await tick();
+        expect((await alice.getParticipantActivities()).some(a => a.conversationId === conversationId)).toBe(true);
+
+        const conversationDeletedHooks: string[] = [];
+        const inviteDeletedHooks: { conversationId: string, fromParticipantId: string, toParticipantId: string }[] = [];
+        transport.server.onAfterConversationDeleted(c => { conversationDeletedHooks.push(c); });
+        transport.server.onAfterInviteDeleted((c, f, t) => { inviteDeletedHooks.push({ conversationId: c, fromParticipantId: f, toParticipantId: t }); });
+
+        await transport.server.leaveConversation(conversationId, "alice");
+        // Admin-path hooks are scheduled on a macrotask, wait for them to drain before asserting
+        await new Promise(resolve => setTimeout(resolve, 0));
+        await tick();
+
+        // Conversation, messages, reactions, invites, and activities are all cleaned up
+        expect(transport.store.conversations.has(conversationId)).toBe(false);
+        expect([...transport.store.messages.values()].some(m => m.conversationId === conversationId)).toBe(false);
+        expect([...transport.store.reactions.values()].some(r => r.messageId === messageId)).toBe(false);
+        expect(transport.store.invites.some(i => i.conversation.conversationId === conversationId)).toBe(false);
+        expect((await alice.getParticipantActivities()).some(a => a.conversationId === conversationId)).toBe(false);
+
+        // Hooks fired for both the conversation deletion and the cascaded invite
+        expect(conversationDeletedHooks).toContain(conversationId);
+        expect(inviteDeletedHooks.some(h => h.conversationId === conversationId && h.fromParticipantId === "alice" && h.toParticipantId === "bob")).toBe(true);
+    });
+
+    test("stop halts the periodic indicator and rate-limit sweeps so they no longer fire after the call returns", async () => {
+        // Tight intervals so a sweep would fire well within the test window if stop() did not halt it
+        const tight = new FakeTransport(
+            { sweepIntervalSeconds: 1, messageLimitPerSecond: 5 },
+            { indicatorTtlSeconds: 1, indicatorCleanupIntervalSeconds: 1 },
+        );
+        try {
+            const alice = tight.addClient("alice");
+            const bob = tight.addClient("bob");
+            const conversationId = await alice.createConversation();
+            await tight.server.joinConversation(conversationId, "bob");
+
+            // Wire up an indicator subscription so we can observe sweep-driven broadcasts (the sweep emits an empty snapshot when it evicts)
+            const indicatorBroadcasts: Indicator[][] = [];
+            await bob.onIndicators(conversationId, i => indicatorBroadcasts.push(i));
+
+            // Track rate-limit state so we can observe (or not) a prune
+            const rateLimiter = (tight.server as unknown as { ctx: { rateLimiter: { states: Map<string, unknown> } } }).ctx.rateLimiter;
+            await alice.sendMessage(conversationId, "early");
+            await alice.setIndicator(conversationId);
+            await tick();
+            expect(rateLimiter.states.has("alice")).toBe(true);
+            const broadcastsBeforeStop = indicatorBroadcasts.length;
+
+            tight.server.stop();
+
+            // Wait well past the indicator TTL and the rate-limit sweep interval - had stop() not halted them, the indicator sweep would broadcast an empty snapshot and the rate-limit sweep would prune alice's expired state
+            await new Promise(resolve => setTimeout(resolve, 2500));
+
+            // No additional sweep-driven indicator broadcast was dispatched
+            expect(indicatorBroadcasts.length).toBe(broadcastsBeforeStop);
+            // Alice's expired rate-limit state was not pruned by a sweep that should not have run
+            expect(rateLimiter.states.has("alice")).toBe(true);
+        } finally {
+            // Idempotent - calling stop again is safe even though the timers are already cleared
+            tight.stop();
+        }
+    });
 });
 
 describe("server reserved participantId", () => {
