@@ -84,6 +84,7 @@ export class Server {
     onCreateMessagesSystemRemoved(handler: Handler<[Message[]], { oldestMessagesByConversationId: Map<string, Message> }>) { this.handlers.createMessagesSystemRemoved = handler; }
     onCreateReaction(handler: Handler<[Reaction], void>) { this.handlers.createReaction = handler; }
     onCreateInvite(handler: Handler<[Invite], { inserted: boolean }>) { this.handlers.createInvite = handler; }
+    onCreateConversationParticipant(handler: Handler<[string, string, number, number], void>) { this.handlers.createConversationParticipant = handler; }
     onCreateConversationParticipantActivity(handler: Handler<[ParticipantActivity], void>) { this.handlers.createConversationParticipantActivity = handler; }
 
     onReadConversations(handler: Handler<[string], Conversation[]>) { this.handlers.readConversations = handler; }
@@ -94,21 +95,20 @@ export class Server {
     onReadConversationParticipantActivity(handler: Handler<[string, string], ParticipantActivity | null>) { this.handlers.readConversationParticipantActivity = handler; }
     onReadParticipantActivities(handler: Handler<[string], ParticipantActivity[]>) { this.handlers.readParticipantActivities = handler; }
     onReadMessage(handler: Handler<[string], Message | null>) { this.handlers.readMessage = handler; }
-    onReadConversationLastMessage(handler: Handler<[string], { messageId: string, createdAt: Date } | null>) { this.handlers.readConversationLastMessageMetadata = handler; }
+    onReadConversationLastMessageMetadata(handler: Handler<[string], { messageId: string, createdAt: Date } | null>) { this.handlers.readConversationLastMessageMetadata = handler; }
     onReadConversation(handler: Handler<[string], Conversation | null>) { this.handlers.readConversation = handler; }
     onReadInvite(handler: Handler<[string, string, string], Invite | null>) { this.handlers.readInvite = handler; }
     onReadReaction(handler: Handler<[string], Reaction | null>) { this.handlers.readReaction = handler; }
 
-    onAddConversationParticipant(handler: Handler<[string, string, number, number], void>) { this.handlers.addConversationParticipant = handler; }
-    onRemoveConversationParticipantAndDeleteParticipantActivity(handler: Handler<[string, string], void>) { this.handlers.removeConversationParticipantAndDeleteParticipantActivity = handler; }
-    onLeaveAllConversationsForParticipantAndDeleteParticipantActivities(handler: Handler<[string], {
-        deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[],
-        remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipantIds: string[], lastMessage: Message | null }[],
-    }>) { this.handlers.leaveAllConversationsForParticipantAndDeleteParticipantActivities = handler; }
     onUpdateMessage(handler: Handler<[Message], void>) { this.handlers.updateMessage = handler; }
     onUpdateConversationParticipantActivity(handler: Handler<[ParticipantActivity], void>) { this.handlers.updateConversationParticipantActivity = handler; }
 
     onDeleteReaction(handler: Handler<[string], void>) { this.handlers.deleteReaction = handler; }
+    onDeleteConversationParticipantAndParticipantActivity(handler: Handler<[string, string], void>) { this.handlers.deleteConversationParticipantAndParticipantActivity = handler; }
+    onDeleteAllConversationParticipantsAndParticipantActivitiesForParticipant(handler: Handler<[string], {
+        deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[],
+        remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipantIds: string[], lastMessage: Message | null }[],
+    }>) { this.handlers.deleteAllConversationParticipantsAndParticipantActivitiesForParticipant = handler; }
     onDeleteConversationWithMessagesReactionsInvitesAndActivities(handler: Handler<[string], { deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }>) { this.handlers.deleteConversationWithMessagesReactionsInvitesAndActivities = handler; }
     onDeleteInvites(handler: Handler<[{ conversationId: string, fromParticipantId: string, toParticipantId: string }[]], void>) { this.handlers.deleteInvites = handler; }
     onDeleteMessagesBefore(handler: Handler<[Date], { affectedConversationIds: string[] }>) { this.handlers.deleteMessagesBefore = handler; }

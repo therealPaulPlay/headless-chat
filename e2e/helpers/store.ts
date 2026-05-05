@@ -152,6 +152,17 @@ export class InMemoryStore {
             this.invites.push({ ...invite });
             return { inserted: true };
         });
+        server.onCreateConversationParticipant((conversationId, participantId, maxParticipants, maxConversationsPerParticipant) => {
+            this.bump("createConversationParticipant");
+            const set = this.conversationParticipants.get(conversationId);
+            if (!set) throw new Error("Conversation not found");
+            if (set.has(participantId)) throw new Error("Already a participant");
+            if (set.size >= maxParticipants) throw new Error("Conversation is full");
+            if (this.countConversationsForParticipant(participantId) >= maxConversationsPerParticipant) {
+                throw new Error("Per-participant conversation limit exceeded");
+            }
+            set.add(participantId);
+        });
         server.onCreateConversationParticipantActivity(activity => {
             this.bump("createConversationParticipantActivity");
             if (!this.isParticipant(activity.conversationId, activity.participantId)) return;
@@ -206,7 +217,7 @@ export class InMemoryStore {
             const message = this.messages.get(messageId);
             return message ? { ...message, reactions: [...message.reactions] } : null;
         });
-        server.onReadConversationLastMessage(conversationId => {
+        server.onReadConversationLastMessageMetadata(conversationId => {
             this.bump("readConversationLastMessageMetadata");
             let latest: Message | null = null;
             for (const message of this.messages.values()) {
@@ -262,45 +273,6 @@ export class InMemoryStore {
 
         // Update handlers -----------------------------------------------
 
-        server.onAddConversationParticipant((conversationId, participantId, maxParticipants, maxConversationsPerParticipant) => {
-            this.bump("addConversationParticipant");
-            const set = this.conversationParticipants.get(conversationId);
-            if (!set) throw new Error("Conversation not found");
-            if (set.has(participantId)) throw new Error("Already a participant");
-            if (set.size >= maxParticipants) throw new Error("Conversation is full");
-            if (this.countConversationsForParticipant(participantId) >= maxConversationsPerParticipant) {
-                throw new Error("Per-participant conversation limit exceeded");
-            }
-            set.add(participantId);
-        });
-        server.onRemoveConversationParticipantAndDeleteParticipantActivity((conversationId, participantId) => {
-            this.bump("removeConversationParticipantAndDeleteParticipantActivity");
-            // Atomic in JS, mirrors the consumer's transaction (remove participant seat + delete their activity row)
-            this.conversationParticipants.get(conversationId)?.delete(participantId);
-            this.activities.delete(this.activityKey(conversationId, participantId));
-        });
-        server.onLeaveAllConversationsForParticipantAndDeleteParticipantActivities(participantId => {
-            this.bump("leaveAllConversationsForParticipantAndDeleteParticipantActivities");
-            const deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] = [];
-            const remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipantIds: string[], lastMessage: Message | null }[] = [];
-            for (const [conversationId, set] of [...this.conversationParticipants]) {
-                if (!set.has(participantId)) continue;
-                if (set.size === 1) {
-                    // Last member, cascade-delete the whole conversation
-                    const formerParticipantIds = [...set];
-                    const deletedInvites = this.deleteConversationAndReturnInvites(conversationId);
-                    deletedConversations.push({ conversationId, formerParticipantIds, deletedInvites });
-                } else {
-                    // Remove this participant + their activity, surface the post-removal state
-                    set.delete(participantId);
-                    this.activities.delete(this.activityKey(conversationId, participantId));
-                    const record = this.conversations.get(conversationId)!;
-                    const surfaced = this.surfaceConversation(record);
-                    remainingConversations.push({ conversationId, conversationRecord: { ...record }, remainingParticipantIds: surfaced.participantIds, lastMessage: surfaced.lastMessage });
-                }
-            }
-            return { deletedConversations, remainingConversations };
-        });
         server.onUpdateMessage(message => {
             this.bump("updateMessage");
             const existing = this.messages.get(message.messageId);
@@ -323,6 +295,34 @@ export class InMemoryStore {
                 const idx = message.reactions.findIndex(r => r.reactionId === reactionId);
                 if (idx >= 0) { message.reactions.splice(idx, 1); return; }
             }
+        });
+        server.onDeleteConversationParticipantAndParticipantActivity((conversationId, participantId) => {
+            this.bump("deleteConversationParticipantAndParticipantActivity");
+            // Atomic in JS, mirrors the consumer's transaction (remove participant seat + delete their activity row)
+            this.conversationParticipants.get(conversationId)?.delete(participantId);
+            this.activities.delete(this.activityKey(conversationId, participantId));
+        });
+        server.onDeleteAllConversationParticipantsAndParticipantActivitiesForParticipant(participantId => {
+            this.bump("deleteAllConversationParticipantsAndParticipantActivitiesForParticipant");
+            const deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[] = [];
+            const remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipantIds: string[], lastMessage: Message | null }[] = [];
+            for (const [conversationId, set] of [...this.conversationParticipants]) {
+                if (!set.has(participantId)) continue;
+                if (set.size === 1) {
+                    // Last member, cascade-delete the whole conversation
+                    const formerParticipantIds = [...set];
+                    const deletedInvites = this.deleteConversationAndReturnInvites(conversationId);
+                    deletedConversations.push({ conversationId, formerParticipantIds, deletedInvites });
+                } else {
+                    // Remove this participant + their activity, surface the post-removal state
+                    set.delete(participantId);
+                    this.activities.delete(this.activityKey(conversationId, participantId));
+                    const record = this.conversations.get(conversationId)!;
+                    const surfaced = this.surfaceConversation(record);
+                    remainingConversations.push({ conversationId, conversationRecord: { ...record }, remainingParticipantIds: surfaced.participantIds, lastMessage: surfaced.lastMessage });
+                }
+            }
+            return { deletedConversations, remainingConversations };
         });
         server.onDeleteConversationWithMessagesReactionsInvitesAndActivities(conversationId => {
             this.bump("deleteConversationWithMessagesReactionsInvitesAndActivities");

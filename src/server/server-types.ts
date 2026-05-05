@@ -54,6 +54,7 @@ export type Handlers = {
     createMessagesSystemRemoved?: Handler<[Message[]], { oldestMessagesByConversationId: Map<string, Message> }>, // Bulk-insert "messagesRemoved" system messages, dedup per-conversation against the current oldest, return each conversation's resulting oldest (just-inserted or pre-existing), always called with at least one message
     createReaction?: Handler<[Reaction], void>,
     createInvite?: Handler<[Invite], { inserted: boolean }>, // Return inserted: false when the triple already exists (dedup no-op), so the lib can skip the broadcast and the afterInviteCreated hook
+    createConversationParticipant?: Handler<[string, string, number, number], void>, // (conversationId, participantId, maxParticipants, maxConversationsPerParticipant), throw if either cap exceeded
     createConversationParticipantActivity?: Handler<[ParticipantActivity], void>,
 
     readConversations?: Handler<[string], Conversation[]>,
@@ -69,16 +70,15 @@ export type Handlers = {
     readInvite?: Handler<[string, string, string], Invite | null>, // (conversationId, fromParticipantId, toParticipantId)
     readReaction?: Handler<[string], Reaction | null>,
 
-    addConversationParticipant?: Handler<[string, string, number, number], void>, // (conversationId, participantId, maxParticipants, maxConversationsPerParticipant), throw if either cap exceeded
-    removeConversationParticipantAndDeleteParticipantActivity?: Handler<[string, string], void>, // (conversationId, participantId), atomically remove the participant from the conversation and delete their participant activity row
-    leaveAllConversationsForParticipantAndDeleteParticipantActivities?: Handler<[string], {
-        deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[],
-        remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipantIds: string[], lastMessage: Message | null }[],
-    }>, // (participantId), atomically remove the participant from every conversation and delete all their activity rows,cConversations where they were the last member get auto-deleted
     updateMessage?: Handler<[Message], void>,
     updateConversationParticipantActivity?: Handler<[ParticipantActivity], void>,
 
     deleteReaction?: Handler<[string], void>,
+    deleteConversationParticipantAndParticipantActivity?: Handler<[string, string], void>, // (conversationId, participantId), atomically remove the participant from the conversation and delete their participant activity row
+    deleteAllConversationParticipantsAndParticipantActivitiesForParticipant?: Handler<[string], {
+        deletedConversations: { conversationId: string, formerParticipantIds: string[], deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }[],
+        remainingConversations: { conversationId: string, conversationRecord: ConversationRecord, remainingParticipantIds: string[], lastMessage: Message | null }[],
+    }>, // (participantId), atomically remove the participant from every conversation and delete all their activity rows,cConversations where they were the last member get auto-deleted
     deleteConversationWithMessagesReactionsInvitesAndActivities?: Handler<[string], { deletedInvites: { fromParticipantId: string, toParticipantId: string }[] }>,
     deleteInvites?: Handler<[{ conversationId: string, fromParticipantId: string, toParticipantId: string }[]], void>,
     deleteMessagesBefore?: Handler<[Date], { affectedConversationIds: string[] }>, // (thresholdDate), return the conversationIds that had at least one message deleted

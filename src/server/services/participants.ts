@@ -8,7 +8,7 @@ export async function deleteParticipant(ctx: ServerContext, participantId: strin
     const hooks: AfterHook[] = [];
 
     // One atomic call removes the participant from every conversation and deletes their activity rows, auto-deleting empty ones
-    const { deletedConversations, remainingConversations } = await getHandler(ctx.handlers, "leaveAllConversationsForParticipantAndDeleteParticipantActivities")(participantId);
+    const { deletedConversations, remainingConversations } = await getHandler(ctx.handlers, "deleteAllConversationParticipantsAndParticipantActivitiesForParticipant")(participantId);
     for (const c of deletedConversations) hooks.push(...handleAutoDeleted(ctx, participantId, c));
     for (const r of remainingConversations) hooks.push(...handleRemaining(ctx, participantId, r));
 

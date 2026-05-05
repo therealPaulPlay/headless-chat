@@ -101,7 +101,7 @@ export async function revokeInviteByPair(ctx: ServerContext, conversationId: str
 // Adds the participant atomically, posts the join system message, returns hooks and prepared events for the caller to bundle and emit
 async function joinFlow(ctx: ServerContext, conversationId: string, participantId: string, conversation: Conversation): Promise<{ hooks: AfterHook[], events: PreparedEvent[][] }> {
     const max = effectiveMaxParticipants(conversation.maxSize, ctx.rateLimits.conversationParticipantLimit);
-    await getHandler(ctx.handlers, "addConversationParticipant")(conversationId, participantId, max, ctx.rateLimits.conversationLimitPerParticipant);
+    await getHandler(ctx.handlers, "createConversationParticipant")(conversationId, participantId, max, ctx.rateLimits.conversationLimitPerParticipant);
     // Patch the cached snapshot
     const cached = ctx.conversationCache.get(conversationId);
     if (cached && !cached.participantIds.includes(participantId)) {
@@ -190,7 +190,7 @@ export async function leaveConversation(ctx: ServerContext, participantId: strin
     }
 
     // Remove first so the system message and the conversation refresh both reflect the post-leave state
-    await getHandler(ctx.handlers, "removeConversationParticipantAndDeleteParticipantActivity")(conversationId, participantId);
+    await getHandler(ctx.handlers, "deleteConversationParticipantAndParticipantActivity")(conversationId, participantId);
     ctx.activityCache.invalidate(`${conversationId}|${participantId}`);
     ctx.conversationCache.invalidate(conversationId);
     // System messages are authored by the reserved "server" participant, the leaving participant id is carried in systemEvent
