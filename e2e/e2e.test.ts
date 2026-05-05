@@ -1966,6 +1966,21 @@ describe("getMessages cursor semantics", () => {
         // Remaining = 1 older (ids[0])
         expect(result.remainingInDirection).toBe(1);
     });
+
+    test("getMessages with an unknown cursor (e.g. a deleted or never-existed messageId) returns an empty page with remainingInDirection: 0", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+        for (let i = 0; i < 3; i++) await alice.sendMessage(conversationId, `m${i}`);
+
+        // Cursor is a syntactically-valid but unknown id, the consumer's onReadMessages signals "cursor not found" by returning an empty page with no remaining
+        const after = await alice.getMessages(conversationId, "00000000-0000-0000-0000-000000000000", true, 50);
+        expect(after.messages).toEqual([]);
+        expect(after.remainingInDirection).toBe(0);
+
+        const before = await alice.getMessages(conversationId, "00000000-0000-0000-0000-000000000000", false, 50);
+        expect(before.messages).toEqual([]);
+        expect(before.remainingInDirection).toBe(0);
+    });
 });
 
 describe("rate limit and capacity cap behaviors", () => {
@@ -2060,6 +2075,45 @@ describe("rate limit and capacity cap behaviors", () => {
             await expect(tight.server.joinConversation(conversationId, "bob")).rejects.toThrow(/conversation limit/i);
         } finally {
             tight.stop();
+        }
+    });
+
+    test("createConversation with maxSize: 0 admits the creator but blocks every subsequent invite (effectiveMaxParticipants clamps the cap to 0, the creator slot was already filled at create time so every createInvite hits the capacity pre-check)", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            transport.addClient("bob");
+            const conversationId = await alice.createConversation(0);
+
+            // Creator is in the conversation
+            expect(transport.store.conversationParticipants.get(conversationId)?.has("alice")).toBe(true);
+
+            // Future invites are rejected up front because conversation.participantIds.length (1) >= max (0)
+            await expect(alice.createInvite(conversationId, "bob")).rejects.toThrow(/full/i);
+            expect(transport.store.invites).toHaveLength(0);
+
+            // Admin joinConversation also fails when it tries to add a second participant past the cap
+            await expect(transport.server.joinConversation(conversationId, "bob")).rejects.toThrow();
+            expect(transport.store.conversationParticipants.get(conversationId)?.has("bob")).toBe(false);
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("createConversation with a negative maxSize behaves like maxSize: 0 - the creator joins but no further invites or joins can succeed", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            transport.addClient("bob");
+            const conversationId = await alice.createConversation(-5);
+
+            expect(transport.store.conversationParticipants.get(conversationId)?.has("alice")).toBe(true);
+
+            await expect(alice.createInvite(conversationId, "bob")).rejects.toThrow(/full/i);
+            await expect(transport.server.joinConversation(conversationId, "bob")).rejects.toThrow();
+            expect(transport.store.conversationParticipants.get(conversationId)?.has("bob")).toBe(false);
+        } finally {
+            transport.stop();
         }
     });
 
@@ -2401,9 +2455,65 @@ describe("message validation and authorization", () => {
         expect(transport.store.cachedConversationMatchesDb(conversationId, cachedAfterRejection)).toBe(true);
 
         // Valid emoji still goes through and the reaction is persisted
-        // TODO known mismatch: README documents addReaction returning reactionId: string but the client currently returns void. This assertion is intentionally written against the README contract so it fails until the client is fixed.
         const reactionId = await alice.addReaction(messageId, "👍");
         expect(transport.store.reactions.get(reactionId)?.content).toBe("👍");
+    });
+
+    test("removeReaction by a non-owner is rejected, the reaction stays in the DB, broadcasts nothing, and the cache stays in sync", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        const messageId = await alice.sendMessage(conversationId, "react to me");
+        const reactionId = await alice.addReaction(messageId, "👍");
+
+        const messages: Message[] = [];
+        const conversations: { conversationId: string, data: Conversation | null }[] = [];
+        await bob.onMessage(conversationId, m => messages.push(m));
+        await alice.onConversation(e => conversations.push(e));
+        await tick();
+        const beforeMessageCount = messages.length;
+        const beforeConversationCount = conversations.length;
+
+        // Bob (non-owner) tries to remove alice's reaction
+        await expect(bob.removeReaction(reactionId)).rejects.toThrow(/Not authorized/i);
+        await tick();
+
+        // Reaction is still in the DB, attached to the message
+        expect(transport.store.reactions.get(reactionId)).toBeTruthy();
+        expect(transport.store.reactions.get(reactionId)?.content).toBe("👍");
+        // No broadcast fanned out, cache still matches DB
+        expect(messages.length).toBe(beforeMessageCount);
+        expect(conversations.length).toBe(beforeConversationCount);
+        const cached = transport.conversationCache.get(conversationId);
+        expect(cached?.lastMessage?.reactions.some(r => r.reactionId === reactionId)).toBe(true);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
+    });
+
+    test("removeReaction of a non-existent reactionId is rejected, broadcasts nothing, and the cache stays in sync", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        await alice.sendMessage(conversationId, "no reactions yet");
+
+        const messages: Message[] = [];
+        const conversations: { conversationId: string, data: Conversation | null }[] = [];
+        await bob.onMessage(conversationId, m => messages.push(m));
+        await alice.onConversation(e => conversations.push(e));
+        await tick();
+        const beforeMessageCount = messages.length;
+        const beforeConversationCount = conversations.length;
+
+        await expect(alice.removeReaction("does-not-exist")).rejects.toThrow(/Reaction not found/i);
+        await tick();
+
+        expect(messages.length).toBe(beforeMessageCount);
+        expect(conversations.length).toBe(beforeConversationCount);
+        const cached = transport.conversationCache.get(conversationId);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, cached)).toBe(true);
     });
 });
 
@@ -2464,6 +2574,50 @@ describe("client invite paths", () => {
 
         // Charlie tries to revoke alice's invite (doesn't own it) - should reject because the lookup finds nothing
         await expect(charlie.revokeInvite(conversationId, "bob")).rejects.toThrow(/Invite not found/);
+    });
+
+    test("createInvite to oneself is rejected, persists nothing, and broadcasts nothing", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+
+        const inviteEvents: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+        await alice.onInvite(e => inviteEvents.push(e));
+        await tick();
+        const before = inviteEvents.length;
+
+        await expect(alice.createInvite(conversationId, "alice")).rejects.toThrow(/yourself/i);
+        await tick();
+
+        expect(transport.store.invites).toHaveLength(0);
+        expect(inviteEvents.length).toBe(before);
+    });
+
+    test("createInvite from a non-participant is rejected, persists nothing, and broadcasts nothing", async () => {
+        const alice = transport.addClient("alice");
+        const charlie = transport.addClient("charlie");
+        transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+
+        const inviteEvents: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+        await charlie.onInvite(e => inviteEvents.push(e));
+        await tick();
+        const before = inviteEvents.length;
+
+        // Charlie is not a participant of alice's conversation but tries to invite bob into it
+        await expect(charlie.createInvite(conversationId, "bob")).rejects.toThrow(/Not a participant/i);
+        await tick();
+
+        expect(transport.store.invites).toHaveLength(0);
+        expect(inviteEvents.length).toBe(before);
+    });
+
+    test("createInvite to a non-existent recipient user is rejected by onCreateInvite and the rejection propagates as a rejected RPC", async () => {
+        const alice = transport.addClient("alice");
+        const conversationId = await alice.createConversation();
+
+        // "ghost" is not registered as a user (transport.addClient also adds the user to the store, but we skip that)
+        await expect(alice.createInvite(conversationId, "ghost")).rejects.toThrow(/Participant does not exist/i);
+        expect(transport.store.invites).toHaveLength(0);
     });
 });
 
@@ -2580,7 +2734,6 @@ describe("after-hooks", () => {
         expect(fired?.toParticipantId).toBe("bob");
     });
 
-    // TODO known mismatch: README documents onAfterInviteCreated as firing "after a new invite is persisted", which implies it should not fire for a deduplicated no-op. The current implementation in conversations.ts always fires the hook regardless of whether the consumer's onCreateInvite deduped. This test is intentionally written against the README contract so it fails until the library is fixed (either to skip the hook on dedup, or to update the README to reflect the always-fires behavior)
     test("onAfterInviteCreated does not fire for a duplicate invite that was deduplicated by onCreateInvite", async () => {
         const inviteCreatedHooks: Invite[] = [];
         transport.server.onAfterInviteCreated(invite => { inviteCreatedHooks.push(invite); });
@@ -2689,13 +2842,11 @@ describe("client API documented return types", () => {
         expect(transport.store.messages.get(result)?.message).toBe("hello");
     });
 
-    // TODO known mismatch: README documents addReaction returning reactionId: string but the client signature currently returns Promise<void>. This test asserts the README contract so it fails until the client is fixed
     test("addReaction returns reactionId: string", async () => {
         const alice = transport.addClient("alice");
         const conversationId = await alice.createConversation();
         const messageId = await alice.sendMessage(conversationId, "react");
-        // The client's TS signature currently says Promise<void>, but the README contract is Promise<string> - Cast through unknown to write the assertion that the README mandates - this test will keep failing until the client signature is corrected to match
-        const result = await alice.addReaction(messageId, "👍") as unknown as string;
+        const result = await alice.addReaction(messageId, "👍");
         expect(typeof result).toBe("string");
         expect(result.length).toBeGreaterThan(0);
         expect(transport.store.reactions.get(result)?.content).toBe("👍");
@@ -2887,6 +3038,157 @@ describe("indicators", () => {
         await alice.removeIndicator(conversationId);
         await tick();
         expect(seen.length).toBe(before);
+    });
+
+    test("setIndicator from a non-participant is rejected, no indicator state is created, and no broadcast fans out to subscribers", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const charlie = transport.addClient("charlie");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Bob is in the conversation and subscribes to indicators - any rejected setIndicator from charlie must not reach him
+        const seen: Indicator[][] = [];
+        await bob.onIndicators(conversationId, indicators => seen.push(indicators));
+        await tick();
+        const before = seen.length;
+
+        // Charlie is not a participant of this conversation
+        await expect(charlie.setIndicator(conversationId)).rejects.toThrow(/Not a participant/i);
+        await tick();
+
+        expect(seen.length).toBe(before);
+    });
+});
+
+describe("join, leave, and accept guards", () => {
+    let transport: FakeTransport;
+
+    beforeEach(() => { transport = new FakeTransport(); });
+    afterEach(() => { transport.stop(); });
+
+    test("leaveConversation by a non-participant is rejected, no participant is removed, and no system message or broadcast fires", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const charlie = transport.addClient("charlie");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        const messages: Message[] = [];
+        const conversations: { conversationId: string, data: Conversation | null }[] = [];
+        await bob.onMessage(conversationId, m => messages.push(m));
+        await alice.onConversation(e => conversations.push(e));
+        await tick();
+        const beforeMessageCount = messages.length;
+        const beforeConversationCount = conversations.length;
+        const beforeParticipants = new Set(transport.store.conversationParticipants.get(conversationId) ?? []);
+
+        // Charlie was never invited
+        await expect(charlie.leaveConversation(conversationId)).rejects.toThrow(/Not a participant/i);
+        await tick();
+
+        expect(transport.store.conversationParticipants.get(conversationId)).toEqual(beforeParticipants);
+        expect(messages.length).toBe(beforeMessageCount);
+        expect(conversations.length).toBe(beforeConversationCount);
+    });
+
+    test("acceptInvite called a second time after the participant is already in the conversation is a no-op: no second participantJoined system message, no second afterParticipantJoined hook, no error", async () => {
+        const joinedHooks: { conversationId: string, participantId: string }[] = [];
+        transport.server.onAfterParticipantJoined((c, p) => { joinedHooks.push({ conversationId: c, participantId: p }); });
+
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        await tick();
+        const sysMessagesAfterFirst = [...transport.store.messages.values()].filter(m => m.systemEvent?.type === "participantJoined" && m.systemEvent.participantId === "bob").length;
+        const joinedHooksAfterFirst = joinedHooks.filter(h => h.participantId === "bob").length;
+        expect(sysMessagesAfterFirst).toBe(1);
+        expect(joinedHooksAfterFirst).toBe(1);
+
+        // Second acceptInvite while bob is already in the conversation - all invites for bob were consumed by the first accept, so this hits the "already a participant + no matching invites" branch
+        await expect(bob.acceptInvite(conversationId)).resolves.toBeUndefined();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        await tick();
+
+        // No new join system message, no extra hook
+        const sysMessagesAfterSecond = [...transport.store.messages.values()].filter(m => m.systemEvent?.type === "participantJoined" && m.systemEvent.participantId === "bob").length;
+        expect(sysMessagesAfterSecond).toBe(sysMessagesAfterFirst);
+        expect(joinedHooks.filter(h => h.participantId === "bob")).toHaveLength(joinedHooksAfterFirst);
+    });
+
+    test("acceptInvite without any outstanding invite for that participant should reject", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+
+        // Bob has no invite to alice's conversation
+        await expect(bob.acceptInvite(conversationId)).rejects.toThrow();
+        expect(transport.store.conversationParticipants.get(conversationId)?.has("bob")).toBe(false);
+    });
+});
+
+describe("not-found errors for non-existent conversations, messages, and reactions", () => {
+    let transport: FakeTransport;
+
+    beforeEach(() => { transport = new FakeTransport(); });
+    afterEach(() => { transport.stop(); });
+
+    test("sendMessage to a non-existent conversation rejects rather than silently no-oping", async () => {
+        const alice = transport.addClient("alice");
+        // Conversation was never created, alice is not a participant of anything
+        // The library calls onCreateMessage which fails the participation guard, surfacing as a rejected RPC
+        await expect(alice.sendMessage("does-not-exist", "hello")).rejects.toThrow();
+        expect([...transport.store.messages.values()].some(m => m.conversationId === "does-not-exist")).toBe(false);
+    });
+
+    test("editMessage of a non-existent messageId rejects with 'Message not found'", async () => {
+        const alice = transport.addClient("alice");
+        await alice.createConversation();
+
+        await expect(alice.editMessage("does-not-exist", "edited")).rejects.toThrow(/Message not found/i);
+    });
+
+    test("deleteMessage of a non-existent messageId rejects with 'Message not found'", async () => {
+        const alice = transport.addClient("alice");
+        await alice.createConversation();
+
+        await expect(alice.deleteMessage("does-not-exist")).rejects.toThrow(/Message not found/i);
+    });
+
+    test("addReaction to a non-existent messageId rejects with 'Message not found' and persists no reaction", async () => {
+        const alice = transport.addClient("alice");
+        await alice.createConversation();
+
+        await expect(alice.addReaction("does-not-exist", "👍")).rejects.toThrow(/Message not found/i);
+        expect(transport.store.reactions.size).toBe(0);
+    });
+
+    test("setIndicator on a non-existent conversation rejects (the participation gate fails when the conversation lookup returns null)", async () => {
+        const alice = transport.addClient("alice");
+        await expect(alice.setIndicator("does-not-exist")).rejects.toThrow(/Not a participant/i);
+    });
+
+    test("leaveConversation on a non-existent conversation rejects with 'Conversation not found'", async () => {
+        const alice = transport.addClient("alice");
+        await expect(alice.leaveConversation("does-not-exist")).rejects.toThrow(/Conversation not found/i);
+    });
+
+    test("createInvite on a non-existent conversation rejects with 'Conversation not found'", async () => {
+        const alice = transport.addClient("alice");
+        transport.addClient("bob");
+        await expect(alice.createInvite("does-not-exist", "bob")).rejects.toThrow(/Conversation not found/i);
+        expect(transport.store.invites).toHaveLength(0);
+    });
+
+    test("acceptInvite on a non-existent conversation rejects with 'Conversation not found'", async () => {
+        const alice = transport.addClient("alice");
+        await expect(alice.acceptInvite("does-not-exist")).rejects.toThrow(/Conversation not found/i);
     });
 });
 

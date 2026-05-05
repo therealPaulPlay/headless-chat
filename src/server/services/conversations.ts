@@ -122,20 +122,19 @@ export async function acceptInvite(ctx: ServerContext, participantId: string, co
     // Fetch only the invites for this participant in this conversation, possibly multiple if several senders invited them
     const matching = await getHandler(ctx.handlers, "readInvitesForRecipient")(conversationId, participantId);
 
-    const hooks: AfterHook[] = [];
-    const eventLists: PreparedEvent[][] = [];
-    if (!conversation.participantIds.includes(participantId)) {
-        const joinResult = await joinFlow(ctx, conversationId, participantId, conversation);
-        hooks.push(...joinResult.hooks);
-        eventLists.push(...joinResult.events);
-    }
+    // Gate on having an invite, otherwise anyone could join any conversation just by guessing its id
+    // Already-a-participant short-circuits as a no-op so accepting an invite twice doesn't error
+    if (conversation.participantIds.includes(participantId)) return { result: undefined, hooks: [] };
+    if (matching.length === 0) throw new Error("No invite found for this conversation");
 
-    if (matching.length > 0) {
-        await getHandler(ctx.handlers, "deleteInvites")(matching.map(invite => ({ conversationId, fromParticipantId: invite.fromParticipantId, toParticipantId: participantId })));
-        for (const invite of matching) {
-            hooks.push(() => fireHook(ctx.handlers, "afterInviteDeleted", conversationId, invite.fromParticipantId, participantId));
-            eventLists.push(ctx.subscriptions.prepareInviteDeleted(conversationId, invite.fromParticipantId, participantId));
-        }
+    const joinResult = await joinFlow(ctx, conversationId, participantId, conversation);
+    const hooks: AfterHook[] = [...joinResult.hooks];
+    const eventLists: PreparedEvent[][] = [...joinResult.events];
+
+    await getHandler(ctx.handlers, "deleteInvites")(matching.map(invite => ({ conversationId, fromParticipantId: invite.fromParticipantId, toParticipantId: participantId })));
+    for (const invite of matching) {
+        hooks.push(() => fireHook(ctx.handlers, "afterInviteDeleted", conversationId, invite.fromParticipantId, participantId));
+        eventLists.push(ctx.subscriptions.prepareInviteDeleted(conversationId, invite.fromParticipantId, participantId));
     }
 
     ctx.subscriptions.emit(...eventLists);
