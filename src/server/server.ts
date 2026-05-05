@@ -95,6 +95,7 @@ export class Server {
     onReadConversationParticipantActivity(handler: Handler<[string, string], ParticipantActivity | null>) { this.handlers.readConversationParticipantActivity = handler; }
     onReadParticipantActivities(handler: Handler<[string], ParticipantActivity[]>) { this.handlers.readParticipantActivities = handler; }
     onReadMessage(handler: Handler<[string], Message | null>) { this.handlers.readMessage = handler; }
+    onReadMessagesByIds(handler: Handler<[string[]], Message[]>) { this.handlers.readMessagesByIds = handler; }
     onReadConversationLastMessageMetadata(handler: Handler<[string], { messageId: string, createdAt: Date } | null>) { this.handlers.readConversationLastMessageMetadata = handler; }
     onReadConversation(handler: Handler<[string], Conversation | null>) { this.handlers.readConversation = handler; }
     onReadInvite(handler: Handler<[string, string, string], Invite | null>) { this.handlers.readInvite = handler; }
@@ -191,7 +192,7 @@ export class Server {
             case "removeReaction": return messagesService.removeReaction(this.ctx, participantId, args[0] as string);
             case "getConversations": return gettersService.getConversations(this.ctx, participantId);
             case "getMessages": return gettersService.getMessages(this.ctx, participantId, args[0] as string, args[1] as string | null, args[2] as boolean, args[3] as number);
-            case "getMessage": return gettersService.getMessage(this.ctx, args[0] as string);
+            case "getMessagesByIds": return gettersService.getMessagesByIds(this.ctx, args[0] as string[]);
             case "getInvites": return gettersService.getInvites(this.ctx, participantId);
             case "getAliases": return gettersService.getAliases(this.ctx, args[0] as string[]);
             case "getParticipantActivities": return gettersService.getParticipantActivities(this.ctx, participantId);

@@ -175,8 +175,8 @@ export class Client {
     getMessages(conversationId: string, cursorMessageId: string | null, after: boolean, amount: number): Promise<{ messages: Message[], remainingInDirection: number }> {
         return this.request("getMessages", [conversationId, cursorMessageId, after, amount]);
     }
-    getMessage(messageId: string): Promise<Message | null> {
-        return this.request<Message | null>("getMessage", [messageId]);
+    getMessagesByIds(messageIds: string[]): Promise<Message[]> {
+        return this.request<Message[]>("getMessagesByIds", [messageIds]);
     }
     getInvites(): Promise<Invite[]> {
         return this.request<Invite[]>("getInvites", []);

@@ -3018,22 +3018,26 @@ describe("getters", () => {
         expect(charlieInvites.some(i => i.conversation.conversationId === conv3)).toBe(true);
     });
 
-    test("getMessage returns the message by id with reactions populated, and null for an unknown id", async () => {
+    test("getMessagesByIds returns the requested messages with reactions populated, omits unknown ids, and is callable with an empty list", async () => {
         const alice = transport.addClient("alice");
         const bob = transport.addClient("bob");
         const conversationId = await alice.createConversation();
         await alice.createInvite(conversationId, "bob");
         await bob.acceptInvite(conversationId);
-        const messageId = await alice.sendMessage(conversationId, "fetch me");
-        await bob.addReaction(messageId, "👍");
+        const m1 = await alice.sendMessage(conversationId, "first");
+        const m2 = await alice.sendMessage(conversationId, "second");
+        await bob.addReaction(m1, "👍");
 
-        const fetched = await alice.getMessage(messageId);
-        expect(fetched?.messageId).toBe(messageId);
-        expect(fetched?.message).toBe("fetch me");
-        expect(fetched?.reactions.find(r => r.participantId === "bob")?.content).toBe("👍");
+        // Mix of known + unknown ids, the unknown one is silently dropped
+        const fetched = await alice.getMessagesByIds([m1, "does-not-exist", m2]);
+        expect(fetched).toHaveLength(2);
+        const byId = new Map(fetched.map(m => [m.messageId, m]));
+        expect(byId.get(m1)?.message).toBe("first");
+        expect(byId.get(m1)?.reactions.find(r => r.participantId === "bob")?.content).toBe("👍");
+        expect(byId.get(m2)?.message).toBe("second");
 
-        // Unknown id returns null
-        expect(await alice.getMessage("does-not-exist")).toBeNull();
+        // Empty input short-circuits
+        expect(await alice.getMessagesByIds([])).toEqual([]);
     });
 });
 

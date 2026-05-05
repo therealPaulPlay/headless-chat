@@ -39,8 +39,9 @@ export async function getMessages(
     return { result, hooks: [] };
 }
 
-export async function getMessage(ctx: ServerContext, messageId: string): Promise<ServiceResult<Message | null>> {
-    const result = await getHandler(ctx.handlers, "readMessage")(messageId);
+export async function getMessagesByIds(ctx: ServerContext, messageIds: string[]): Promise<ServiceResult<Message[]>> {
+    if (messageIds.length === 0) return { result: [], hooks: [] };
+    const result = await getHandler(ctx.handlers, "readMessagesByIds")(messageIds);
     return { result, hooks: [] };
 }
 

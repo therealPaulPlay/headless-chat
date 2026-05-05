@@ -217,6 +217,13 @@ export class InMemoryStore {
             const message = this.messages.get(messageId);
             return message ? { ...message, reactions: [...message.reactions] } : null;
         });
+        server.onReadMessagesByIds(messageIds => {
+            this.bump("readMessagesByIds");
+            return messageIds.flatMap(id => {
+                const m = this.messages.get(id);
+                return m ? [{ ...m, reactions: [...m.reactions] }] : [];
+            });
+        });
         server.onReadConversationLastMessageMetadata(conversationId => {
             this.bump("readConversationLastMessageMetadata");
             let latest: Message | null = null;

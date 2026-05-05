@@ -67,7 +67,7 @@ A function that takes no parameters and returns `authData: unknown` that is sent
 | ------ | ----------- | ----------- |
 | async getConversations() | conversations: Conversation[] | Get all conversations the participant is in. |
 | async getMessages(conversationId: string, cursorMessageId: string \| null, after: boolean, amount: number) | { messages: Message[], remainingInDirection: number } | Get up to `amount` messages strictly newer (`after: true`) or strictly older (`after: false`) than the cursor. The cursor message itself is never included. A null cursor returns the newest page. |
-| async getMessage(messageId: string) | message: Message \| null | Get a single message by ID with reactions populated, or null if it does not exist. |
+| async getMessagesByIds(messageIds: string[]) | messages: Message[] | Bulk-lookup messages by ID. Missing IDs are omitted. |
 | async getInvites() | invites: Invite[]| Get all invites, both for the participant and by the participant. |
 | async getAliases([participantId: string, participantId...]) | aliases: Alias[] | Get server-defined aliases for participants. This serves as a simple lookup for your server-defined username system. |
 | async getParticipantActivities() | activities: ParticipantActivity[] | Get the calling participant's read state across all their conversations. Used to derive unread counts client-side. |
@@ -174,6 +174,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onReadConversation(handler: function) | conversationId: string | conversation: Conversation \| null | Should return the conversation by ID with `lastMessage` populated, or `null` if it does not exist. |
 | onReadMessages(handler: function) | conversationId: string, cursorMessageId: string, after: boolean, amount: number | { messages: Message[], remainingInDirection: number } | Should return an array of messages ordered by `createdAt` ascending, each with its `reactions` array populated. The cursor message is never included. With `after: true` return strictly newer, with `after: false` strictly older. |
 | onReadMessage(handler: function) | messageId: string | message: Message \| null | Should return the message by ID with reactions populated, or null. |
+| onReadMessagesByIds(handler: function) | messageIds: string[] | messages: Message[] | Should return all matching messages with reactions populated, in any order. Missing IDs are omitted from the result. |
 | onReadConversationLastMessageMetadata(handler: function) | conversationId: string | { messageId: string, createdAt: Date } \| null | Should return the ID and timestamp of the conversation's most recent message, or null if it has none. |
 | onReadReaction(handler: function) | reactionId: string | reaction: Reaction \| null | Should return the reaction by ID, or null. |
 | onReadInvitesInvolvingParticipant(handler: function) | participantId: string | invites: Invite[] | Should return all invites where the participant is the sender or recipient, ordered by `createdAt` descending. |
