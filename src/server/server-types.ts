@@ -13,6 +13,7 @@ export type ServerDispatch = (participantId: string, data: unknown) => void;
 export type RateLimitOptions = {
     inviteLimitPerHour?: number,
     messageLimitPerSecond?: number,
+    messageMaxLength?: number,
     conversationParticipantLimit?: number,
     conversationLimitPerParticipant?: number,
     sweepIntervalSeconds?: number,
@@ -31,6 +32,7 @@ export type CleanupOptions = {
 export type ResolvedRateLimits = {
     inviteLimitPerHour: number,
     messageLimitPerSecond: number,
+    messageMaxLength: number,
     conversationParticipantLimit: number,
     conversationLimitPerParticipant: number,
     sweepIntervalSeconds: number,

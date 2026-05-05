@@ -2344,6 +2344,37 @@ describe("rate limit and capacity cap behaviors", () => {
         }
     });
 
+    test("messageMaxLength rejects sendMessage and editMessage when text exceeds the configured cap, the admin sendMessage is exempt", async () => {
+        const tight = new FakeTransport({ messageMaxLength: 10 });
+        try {
+            const alice = tight.addClient("alice");
+            const conversationId = await alice.createConversation();
+
+            // Within cap
+            const messageId = await alice.sendMessage(conversationId, "ok");
+            // Over cap on send
+            await expect(alice.sendMessage(conversationId, "12345678901")).rejects.toThrow(/max length/i);
+            // Over cap on edit
+            await expect(alice.editMessage(messageId, "12345678901")).rejects.toThrow(/max length/i);
+            // Admin sendMessage bypasses the cap, same as it bypasses rate limit and profanity
+            await expect(tight.server.sendMessage(conversationId, "alice", "12345678901")).resolves.toBeTruthy();
+        } finally {
+            tight.stop();
+        }
+    });
+
+    test("messageMaxLength defaults to 5000 when unset", async () => {
+        const t = new FakeTransport();
+        try {
+            const alice = t.addClient("alice");
+            const conversationId = await alice.createConversation();
+            await expect(alice.sendMessage(conversationId, "x".repeat(5000))).resolves.toBeTruthy();
+            await expect(alice.sendMessage(conversationId, "x".repeat(5001))).rejects.toThrow(/max length/i);
+        } finally {
+            t.stop();
+        }
+    });
+
     test("inviteLimitPerHour is enforced per sender, not globally", async () => {
         const tight = new FakeTransport({ inviteLimitPerHour: 1 });
         try {

@@ -107,8 +107,9 @@ An object that configures the rate limiting of key actions the library handles.
 {
     inviteLimitPerHour?: number, // Defaults to 10
     messageLimitPerSecond?: number, // Defaults to 5
+    messageMaxLength?: number, // Defaults to 5000
     conversationParticipantLimit?: number, // Defaults to 100, acts as the hard global limit that takes precedence over maxSize
-    conversationLimitPerParticipant?: number, // Defaults to 100, max conversations per participant
+    conversationLimitPerParticipant?: number, // Defaults to 100
     sweepIntervalSeconds?: number, // Defaults to 30, sweep that prunes per-participant rate limit state
 }
 ```

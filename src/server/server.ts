@@ -42,6 +42,7 @@ export class Server {
         this.rateLimits = {
             inviteLimitPerHour: rateLimits.inviteLimitPerHour ?? 10,
             messageLimitPerSecond: rateLimits.messageLimitPerSecond ?? 5,
+            messageMaxLength: rateLimits.messageMaxLength ?? 5000,
             conversationParticipantLimit: rateLimits.conversationParticipantLimit ?? 100,
             conversationLimitPerParticipant: rateLimits.conversationLimitPerParticipant ?? 100,
             sweepIntervalSeconds: rateLimits.sweepIntervalSeconds ?? 30,

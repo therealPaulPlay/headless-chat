@@ -54,6 +54,7 @@ export function buildMessage(participantId: string, conversationId: string, text
 // Client path
 export async function sendMessage(ctx: ServerContext, participantId: string, conversationId: string, text: string, options?: MessageOptions): Promise<ServiceResult<string>> {
     if (typeof text !== "string" || text.length === 0) throw new Error("Message must be a non-empty string");
+    if (text.length > ctx.rateLimits.messageMaxLength) throw new Error(`Message exceeds max length of ${ctx.rateLimits.messageMaxLength} characters`);
     ctx.rateLimiter.trackMessage(participantId);
     const finalText = await applyProfanityChecks(ctx.handlers, text);
 
@@ -68,6 +69,7 @@ export async function sendMessage(ctx: ServerContext, participantId: string, con
 
 export async function editMessage(ctx: ServerContext, participantId: string, messageId: string, text: string): Promise<ServiceResult<void>> {
     if (typeof text !== "string" || text.length === 0) throw new Error("Message must be a non-empty string");
+    if (text.length > ctx.rateLimits.messageMaxLength) throw new Error(`Message exceeds max length of ${ctx.rateLimits.messageMaxLength} characters`);
     ctx.rateLimiter.trackMessage(participantId);
     const finalText = await applyProfanityChecks(ctx.handlers, text);
 
