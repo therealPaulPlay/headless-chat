@@ -117,18 +117,22 @@ export class Subscriptions {
 
     // Prepare helpers ---------------------------------------
 
-    prepareMessage(message: Message): PreparedEvent[] {
+    prepareMessage(message: Message, bumpActivity: boolean): PreparedEvent[] {
         const scope: Scope = { kind: "message", conversationId: message.conversationId };
         const subs = this.byScope.get(encodeScope(scope));
         const targets = subs ? [...subs] : [];
-        // Synthesize a virtual activity update for each live message-scope subscriber (the real DB persist happens when unsubscribing from messages and in getMessages)
-        const activityEvents = targets.flatMap(participantId => this.prepareParticipantActivity(participantId, {
-            conversationId: message.conversationId,
-            participantId,
-            lastReadMessageId: message.messageId,
-            lastReadMessageCreatedAt: message.createdAt,
-        }));
-        return [{ scope, data: message, targets }, ...activityEvents];
+        const events: PreparedEvent[] = [{ scope, data: message, targets }];
+        if (bumpActivity) {
+            for (const participantId of targets) {
+                events.push(...this.prepareParticipantActivity(participantId, {
+                    conversationId: message.conversationId,
+                    participantId,
+                    lastReadMessageId: message.messageId,
+                    lastReadMessageCreatedAt: message.createdAt,
+                }));
+            }
+        }
+        return events;
     }
 
     prepareIndicators(conversationId: string): PreparedEvent[] {

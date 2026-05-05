@@ -119,6 +119,96 @@ describe("mixed real-world scenarios", () => {
         expect(afterRemove?.reactions).toHaveLength(0);
     });
 
+    test("addReaction does not broadcast any participant activity events and lastActivityAt should not change", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        const messageId = await alice.sendMessage(conversationId, "react to me");
+        await tick();
+        const lastActivityBefore = (await alice.getConversations()).find(c => c.conversationId === conversationId)!.lastActivityAt.getTime();
+
+        // Both participants subscribe to message + activity streams so we can observe any side-effect events
+        const aliceActivities: { conversationId: string, data: ParticipantActivity | null }[] = [];
+        const bobActivities: { conversationId: string, data: ParticipantActivity | null }[] = [];
+        await alice.onMessage(conversationId, () => { });
+        await bob.onMessage(conversationId, () => { });
+        await alice.onParticipantActivity(e => aliceActivities.push(e));
+        await bob.onParticipantActivity(e => bobActivities.push(e));
+
+        await alice.addReaction(messageId, "👍");
+        await tick();
+
+        // Strict: no participant activity events should fire as a side effect of reacting
+        expect(aliceActivities.filter(e => e.conversationId === conversationId)).toHaveLength(0);
+        expect(bobActivities.filter(e => e.conversationId === conversationId)).toHaveLength(0);
+
+        // The conversation's lastActivityAt should not change, reacting is not message creation
+        const lastActivityAfter = (await alice.getConversations()).find(c => c.conversationId === conversationId)!.lastActivityAt.getTime();
+        expect(lastActivityAfter).toBe(lastActivityBefore);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, transport.conversationCache.get(conversationId))).toBe(true);
+    });
+
+    test("editMessage does not broadcast any participant activity events and lastActivityAt should not change", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        const messageId = await alice.sendMessage(conversationId, "before edit");
+        await tick();
+        const lastActivityBefore = (await alice.getConversations()).find(c => c.conversationId === conversationId)!.lastActivityAt.getTime();
+
+        const aliceActivities: { conversationId: string, data: ParticipantActivity | null }[] = [];
+        const bobActivities: { conversationId: string, data: ParticipantActivity | null }[] = [];
+        await alice.onMessage(conversationId, () => { });
+        await bob.onMessage(conversationId, () => { });
+        await alice.onParticipantActivity(e => aliceActivities.push(e));
+        await bob.onParticipantActivity(e => bobActivities.push(e));
+
+        await alice.editMessage(messageId, "after edit");
+        await tick();
+
+        expect(aliceActivities.filter(e => e.conversationId === conversationId)).toHaveLength(0);
+        expect(bobActivities.filter(e => e.conversationId === conversationId)).toHaveLength(0);
+
+        const lastActivityAfter = (await alice.getConversations()).find(c => c.conversationId === conversationId)!.lastActivityAt.getTime();
+        expect(lastActivityAfter).toBe(lastActivityBefore);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, transport.conversationCache.get(conversationId))).toBe(true);
+    });
+
+    test("deleteMessage does not broadcast any participant activity events and lastActivityAt should not change", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        const messageId = await alice.sendMessage(conversationId, "delete me");
+        await tick();
+        const lastActivityBefore = (await alice.getConversations()).find(c => c.conversationId === conversationId)!.lastActivityAt.getTime();
+
+        const aliceActivities: { conversationId: string, data: ParticipantActivity | null }[] = [];
+        const bobActivities: { conversationId: string, data: ParticipantActivity | null }[] = [];
+        await alice.onMessage(conversationId, () => { });
+        await bob.onMessage(conversationId, () => { });
+        await alice.onParticipantActivity(e => aliceActivities.push(e));
+        await bob.onParticipantActivity(e => bobActivities.push(e));
+
+        await alice.deleteMessage(messageId);
+        await tick();
+
+        expect(aliceActivities.filter(e => e.conversationId === conversationId)).toHaveLength(0);
+        expect(bobActivities.filter(e => e.conversationId === conversationId)).toHaveLength(0);
+
+        const lastActivityAfter = (await alice.getConversations()).find(c => c.conversationId === conversationId)!.lastActivityAt.getTime();
+        expect(lastActivityAfter).toBe(lastActivityBefore);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, transport.conversationCache.get(conversationId))).toBe(true);
+    });
+
     test("setIndicator broadcasts to subscribers and TTL evicts after expiry", async () => {
         // Tight TTL + sweep so the test can advance real time and observe eviction quickly
         const tight = new FakeTransport(undefined, { indicatorTtlSeconds: 1, indicatorCleanupIntervalSeconds: 1 });
@@ -539,6 +629,145 @@ describe("mixed real-world scenarios", () => {
         } finally {
             tight.stop();
         }
+    });
+
+    // Edits, deletes, and reaction changes on the conversation's lastMessage must broadcast a refreshed conversation snapshot, otherwise onConversation subscribers see a stale preview while getConversations would return the new one. Operations on non-last messages must NOT broadcast a conversation event since the preview did not change
+    test("editMessage on the lastMessage broadcasts a refreshed conversation event with the updated preview, lastActivityAt unchanged", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        const messageId = await alice.sendMessage(conversationId, "before edit");
+        await tick();
+        const lastActivityBefore = (await bob.getConversations()).find(c => c.conversationId === conversationId)!.lastActivityAt.getTime();
+
+        const convEvents: { conversationId: string, data: Conversation | null }[] = [];
+        await bob.onConversation(e => convEvents.push(e));
+        const initialLen = convEvents.length;
+
+        await alice.editMessage(messageId, "after edit");
+        await tick();
+
+        const fresh = convEvents.slice(initialLen).filter(e => e.conversationId === conversationId && e.data !== null);
+        expect(fresh).not.toHaveLength(0);
+        expect(fresh.at(-1)?.data?.lastMessage?.message).toBe("after edit");
+        expect(fresh.at(-1)?.data?.lastActivityAt.getTime()).toBe(lastActivityBefore);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, transport.conversationCache.get(conversationId))).toBe(true);
+    });
+
+    test("editMessage on a non-last message does NOT broadcast a conversation event", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        const olderMessageId = await alice.sendMessage(conversationId, "older");
+        await alice.sendMessage(conversationId, "newer");
+        await tick();
+
+        const convEvents: { conversationId: string, data: Conversation | null }[] = [];
+        await bob.onConversation(e => convEvents.push(e));
+        const initialLen = convEvents.length;
+
+        await alice.editMessage(olderMessageId, "older edited");
+        await tick();
+
+        expect(convEvents.slice(initialLen).filter(e => e.conversationId === conversationId)).toHaveLength(0);
+    });
+
+    test("deleteMessage on the lastMessage broadcasts a refreshed conversation event showing the tombstone, lastActivityAt unchanged", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        const messageId = await alice.sendMessage(conversationId, "delete me");
+        await tick();
+        const lastActivityBefore = (await bob.getConversations()).find(c => c.conversationId === conversationId)!.lastActivityAt.getTime();
+
+        const convEvents: { conversationId: string, data: Conversation | null }[] = [];
+        await bob.onConversation(e => convEvents.push(e));
+        const initialLen = convEvents.length;
+
+        await alice.deleteMessage(messageId);
+        await tick();
+
+        const fresh = convEvents.slice(initialLen).filter(e => e.conversationId === conversationId && e.data !== null);
+        expect(fresh).not.toHaveLength(0);
+        expect(fresh.at(-1)?.data?.lastMessage?.deleted).toBe(true);
+        expect(fresh.at(-1)?.data?.lastActivityAt.getTime()).toBe(lastActivityBefore);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, transport.conversationCache.get(conversationId))).toBe(true);
+    });
+
+    test("deleteMessage on a non-last message does NOT broadcast a conversation event", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        const olderMessageId = await alice.sendMessage(conversationId, "older");
+        await alice.sendMessage(conversationId, "newer");
+        await tick();
+
+        const convEvents: { conversationId: string, data: Conversation | null }[] = [];
+        await bob.onConversation(e => convEvents.push(e));
+        const initialLen = convEvents.length;
+
+        await alice.deleteMessage(olderMessageId);
+        await tick();
+
+        expect(convEvents.slice(initialLen).filter(e => e.conversationId === conversationId)).toHaveLength(0);
+    });
+
+    test("addReaction on the lastMessage broadcasts a refreshed conversation event showing the new reaction, lastActivityAt unchanged", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        const messageId = await alice.sendMessage(conversationId, "react to me");
+        await tick();
+        const lastActivityBefore = (await bob.getConversations()).find(c => c.conversationId === conversationId)!.lastActivityAt.getTime();
+
+        const convEvents: { conversationId: string, data: Conversation | null }[] = [];
+        await bob.onConversation(e => convEvents.push(e));
+        const initialLen = convEvents.length;
+
+        await alice.addReaction(messageId, "👍");
+        await tick();
+
+        const fresh = convEvents.slice(initialLen).filter(e => e.conversationId === conversationId && e.data !== null);
+        expect(fresh).not.toHaveLength(0);
+        expect(fresh.at(-1)?.data?.lastMessage?.reactions.find(r => r.participantId === "alice")?.content).toBe("👍");
+        expect(fresh.at(-1)?.data?.lastActivityAt.getTime()).toBe(lastActivityBefore);
+        expect(transport.store.cachedConversationMatchesDb(conversationId, transport.conversationCache.get(conversationId))).toBe(true);
+    });
+
+    test("addReaction on a non-last message does NOT broadcast a conversation event", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        const olderMessageId = await alice.sendMessage(conversationId, "older");
+        await alice.sendMessage(conversationId, "newer");
+        await tick();
+
+        const convEvents: { conversationId: string, data: Conversation | null }[] = [];
+        await bob.onConversation(e => convEvents.push(e));
+        const initialLen = convEvents.length;
+
+        await alice.addReaction(olderMessageId, "👍");
+        await tick();
+
+        expect(convEvents.slice(initialLen).filter(e => e.conversationId === conversationId)).toHaveLength(0);
     });
 });
 

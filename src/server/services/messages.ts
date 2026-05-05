@@ -33,7 +33,7 @@ async function persistAndPrepareMessage(ctx: ServerContext, message: Message): P
     }
     ctx.conversationCache.set(message.conversationId, conversation);
 
-    return [ctx.subscriptions.prepareMessage(message), ctx.subscriptions.prepareConversation(conversation)];
+    return [ctx.subscriptions.prepareMessage(message, true), ctx.subscriptions.prepareConversation(conversation)];
 }
 
 export function buildMessage(participantId: string, conversationId: string, text: string, options: MessageOptions | undefined, systemEvent: SystemEvent | null, createdAt?: Date): Message {
@@ -84,13 +84,17 @@ export async function editMessage(ctx: ServerContext, participantId: string, mes
         modifiedAt: now(),
     };
     await getHandler(ctx.handlers, "updateMessage")(updated);
-    // If the edited message is the conversation's lastMessage, the cached snapshot is stale - patch it
+    // If the edited message is the conversation's lastMessage, the cached snapshot is stale, patch it and broadcast a refreshed conversation snapshot so onConversation subscribers see the updated preview
     const cached = ctx.conversationCache.get(updated.conversationId);
-    if (cached?.lastMessage?.messageId === updated.messageId) {
+    const isLast = cached?.lastMessage?.messageId === updated.messageId;
+    if (cached && isLast) {
         cached.lastMessage = updated;
         ctx.conversationCache.set(updated.conversationId, cached);
     }
-    ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(updated));
+    ctx.subscriptions.emit(
+        ctx.subscriptions.prepareMessage(updated, false),
+        ...(cached && isLast ? [ctx.subscriptions.prepareConversation(cached)] : []),
+    );
     return { result: undefined, hooks: [] };
 }
 
@@ -103,13 +107,17 @@ export async function deleteMessage(ctx: ServerContext, participantId: string, m
     // Keep the row so replies and pagination stay consistent
     const tombstoned: Message = { ...existing, deleted: true, modifiedAt: now() };
     await getHandler(ctx.handlers, "updateMessage")(tombstoned);
-    // If the tombstoned message is the conversation's lastMessage, the cached snapshot is stale - patch it
+    // If the tombstoned message is the conversation's lastMessage, the cached snapshot is stale, patch it and broadcast a refreshed conversation snapshot so onConversation subscribers see the tombstone
     const cached = ctx.conversationCache.get(tombstoned.conversationId);
-    if (cached?.lastMessage?.messageId === tombstoned.messageId) {
+    const isLast = cached?.lastMessage?.messageId === tombstoned.messageId;
+    if (cached && isLast) {
         cached.lastMessage = tombstoned;
         ctx.conversationCache.set(tombstoned.conversationId, cached);
     }
-    ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(tombstoned));
+    ctx.subscriptions.emit(
+        ctx.subscriptions.prepareMessage(tombstoned, false),
+        ...(cached && isLast ? [ctx.subscriptions.prepareConversation(cached)] : []),
+    );
     return { result: undefined, hooks: [() => fireHook(ctx.handlers, "afterMessageDeleted", tombstoned)] };
 }
 
@@ -132,12 +140,16 @@ export async function addReaction(ctx: ServerContext, participantId: string, mes
     const updated: Message = { ...existing, reactions: [...existing.reactions.filter(r => r.participantId !== participantId), reaction] };
 
     const cached = ctx.conversationCache.get(existing.conversationId);
-    if (cached?.lastMessage?.messageId === messageId) {
+    const isLast = cached?.lastMessage?.messageId === messageId;
+    if (cached && isLast) {
         cached.lastMessage = updated;
         ctx.conversationCache.set(existing.conversationId, cached);
     }
-    // Emit the locally constructed updated message rather than re-reading it
-    ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(updated));
+    // Emit the locally constructed updated message rather than re-reading it. If the reaction landed on the lastMessage also broadcast a refreshed conversation snapshot so onConversation subscribers see the new reaction in the preview
+    ctx.subscriptions.emit(
+        ctx.subscriptions.prepareMessage(updated, false),
+        ...(cached && isLast ? [ctx.subscriptions.prepareConversation(cached)] : []),
+    );
     return { result: reaction.reactionId, hooks: [] };
 }
 
@@ -147,21 +159,24 @@ export async function removeReaction(ctx: ServerContext, participantId: string, 
     if (reaction.participantId !== participantId) throw new Error("Not authorized to remove this reaction");
     await getHandler(ctx.handlers, "deleteReaction")(reactionId);
 
-    // Patch the cached snapshot if the reaction's message is the conversation's lastMessage, and broadcast the patched message without re-reading
+    // Patch the cached snapshot if the reaction's message is the conversation's lastMessage, broadcast both the patched message and a refreshed conversation snapshot
     const conversationId = ctx.conversationCache.findKey(c => c.lastMessage?.messageId === reaction.messageId);
     if (conversationId) {
         const cached = ctx.conversationCache.get(conversationId)!;
         const patched: Message = { ...cached.lastMessage!, reactions: cached.lastMessage!.reactions.filter(r => r.reactionId !== reactionId) };
         cached.lastMessage = patched;
         ctx.conversationCache.set(conversationId, cached);
-        ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(patched));
+        ctx.subscriptions.emit(
+            ctx.subscriptions.prepareMessage(patched, false),
+            ctx.subscriptions.prepareConversation(cached),
+        );
         return { result: undefined, hooks: [] };
     }
 
     // Fallback for reactions on older (non-cached) messages: re-read so subscribers see the post-removal state
     try {
         const message = await getHandler(ctx.handlers, "readMessage")(reaction.messageId);
-        if (message) ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(message));
+        if (message) ctx.subscriptions.emit(ctx.subscriptions.prepareMessage(message, false));
     } catch (error) { logError("readMessage", error); }
     return { result: undefined, hooks: [] };
 }
