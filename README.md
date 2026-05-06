@@ -90,8 +90,18 @@ Event methods are async because subscribing and unsubscribing roundtrip to the s
 | async offInvite(handler: function) | - | Unsubscribe a handler. |
 | async onParticipantActivity(handler: function) | event: { conversationId: string, data: ParticipantActivity \| null } | Subscribe to live updates of the calling participant's read state. `data: null` means the activity was deleted. |
 | async offParticipantActivity(handler: function) | - | Unsubscribe a handler. |
-| async onMany(entries: SubscriptionEntry[]) | - | Bundle multiple subscriptions into one network round-trip. Each entry is `{ kind, handlers, conversationId? }` where `kind` is one of `"message" \| "indicators" \| "conversation" \| "invite" \| "participantActivity"`, `handlers` is an array of handlers for that scope, and `conversationId` is required for `"message"` and `"indicators"`. |
+| async onMany(entries: SubscriptionEntry[]) | - | Bundle multiple subscriptions into one network round-trip. |
 | async offMany(handlers: function[]) | - | Unsubscribe from multiple handlers in one bundled request, takes handlers directly. |
+
+#### SubscriptionEntry
+
+```ts
+| { kind: "message", conversationId: string, handlers: ((message: Message) => void)[] }
+| { kind: "indicators", conversationId: string, handlers: ((indicators: Indicator[]) => void)[] }
+| { kind: "conversation", handlers: ((event: { conversationId: string, data: Conversation | null }) => void)[] }
+| { kind: "invite", handlers: ((event: { conversationId: string, toParticipantId: string, data: Invite | null }) => void)[] }
+| { kind: "participantActivity", handlers: ((event: { conversationId: string, data: ParticipantActivity | null }) => void)[] }
+```
 
 ## Server API
 
