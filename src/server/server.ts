@@ -40,8 +40,9 @@ export class Server {
     constructor(dispatch: ServerDispatch, rateLimits: RateLimitOptions = {}, cleanup: CleanupOptions = {}) {
         this.dispatch = dispatch;
         this.rateLimits = {
-            inviteLimitPerHour: rateLimits.inviteLimitPerHour ?? 10,
-            messageLimitPerSecond: rateLimits.messageLimitPerSecond ?? 5,
+            inviteLimitPerParticipantPerHour: rateLimits.inviteLimitPerParticipantPerHour ?? 10,
+            inviteLimitPerParticipant: rateLimits.inviteLimitPerParticipant ?? 50,
+            messageLimitPerParticipantPerSecond: rateLimits.messageLimitPerParticipantPerSecond ?? 5,
             messageMaxLength: rateLimits.messageMaxLength ?? 5000,
             conversationParticipantLimit: rateLimits.conversationParticipantLimit ?? 100,
             conversationLimitPerParticipant: rateLimits.conversationLimitPerParticipant ?? 100,
@@ -84,7 +85,7 @@ export class Server {
     onCreateMessage(handler: Handler<[Message], void>) { this.handlers.createMessage = handler; }
     onCreateMessagesSystemRemoved(handler: Handler<[Message[]], { oldestMessagesByConversationId: Map<string, Message> }>) { this.handlers.createMessagesSystemRemoved = handler; }
     onCreateReaction(handler: Handler<[Reaction], void>) { this.handlers.createReaction = handler; }
-    onCreateInvite(handler: Handler<[Invite], { inserted: boolean }>) { this.handlers.createInvite = handler; }
+    onCreateInvite(handler: Handler<[Invite, number], { inserted: boolean }>) { this.handlers.createInvite = handler; }
     onCreateConversationParticipant(handler: Handler<[string, string, number, number], void>) { this.handlers.createConversationParticipant = handler; }
     onCreateConversationParticipantActivity(handler: Handler<[ParticipantActivity], void>) { this.handlers.createConversationParticipantActivity = handler; }
 

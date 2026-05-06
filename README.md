@@ -105,8 +105,9 @@ An object that configures the rate limiting of key actions the library handles.
 
 ```ts
 {
-    inviteLimitPerHour?: number, // Defaults to 10
-    messageLimitPerSecond?: number, // Defaults to 5
+    inviteLimitPerParticipantPerHour?: number, // Defaults to 10
+    inviteLimitPerParticipant?: number, // Defaults to 50, hard cap on a participant's pending outgoing invites
+    messageLimitPerParticipantPerSecond?: number, // Defaults to 5
     messageMaxLength?: number, // Defaults to 5000
     conversationParticipantLimit?: number, // Defaults to 100, acts as the hard global limit that takes precedence over maxSize
     conversationLimitPerParticipant?: number, // Defaults to 100
@@ -160,12 +161,12 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 **Create handlers:**
 | Method | Calls with | Should return | Description |
 | ------ | ---------- | --------------------- | ------------|
-| onCreateConversation(handler: function) | conversation: ConversationRecord, creatorParticipantId: string, maxConversationsPerParticipant: number | - | Should atomically insert the conversation row and add `creatorParticipantId` as the first participant. Throw if the creator is already in `maxConversationsPerParticipant` conversations. |
+| onCreateConversation(handler: function) | conversation: ConversationRecord, creatorParticipantId: string, conversationLimitPerParticipant: number | - | Should atomically insert the conversation row and add `creatorParticipantId` as the first participant. Throw if the creator is already in `conversationLimitPerParticipant` conversations. |
 | onCreateMessage(handler: function) | message: Message | - | Atomically create the message and bump the conversation's `lastActivityAt` to `message.createdAt` only if it's newer (e.g. `GREATEST(last_activity_at, ?)` in SQL). Guard the insert with a participation check so a participant who concurrently left cannot post, except when `participantId === "server"`, which is the reserved sentinel for system messages and must always be allowed. |
 | onCreateMessagesSystemRemoved(handler: function) | messages: Message[] | { oldestMessagesByConversationId: Map<string, Message> } | Bulk-insert "messagesRemoved" system messages, one per input message. Skip per-conversation if the conversation's current oldest message is already a "messagesRemoved" system message. For every input conversationId, return its resulting oldest message: the just-inserted one or the pre-existing system message that caused the skip. No participation check and no `lastActivityAt` bump. |
 | onCreateReaction(handler: function) | reaction: Reaction | - | Create the reaction, replacing any prior reaction by the same `(messageId, participantId)` pair. Guard the insert with a participation check. |
-| onCreateInvite(handler: function) | invite: Invite | { inserted: boolean } | Atomically insert the invite, deduplicating on the triple `(conversationId, fromParticipantId, toParticipantId)`. Return `inserted: false` on a dedup no-op so the lib can skip the broadcast and `afterInviteCreated` hook. If the recipient is already a participant of the conversation, throw. The insert must verify that both `fromParticipantId` and `toParticipantId` exist in your users table. |
-| onCreateConversationParticipant(handler: function) | conversationId: string, participantId: string, maxParticipants: number, maxConversationsPerParticipant: number | - | Should atomically add the participant only if the conversation has fewer than `maxParticipants`, the participant is not already in it, and the participant is in fewer than `maxConversationsPerParticipant` conversations. Throw if any condition fails. |
+| onCreateInvite(handler: function) | invite: Invite, inviteLimitPerParticipant: number | { inserted: boolean } | Atomically insert the invite, deduplicating on the triple `(conversationId, fromParticipantId, toParticipantId)`. Throw if the sender already has `inviteLimitPerParticipant` pending outgoing invites (count atomically with the insert to prevent races). Return `inserted: false` on a dedup no-op so the lib can skip the broadcast and `afterInviteCreated` hook. If the recipient is already a participant of the conversation, throw. The insert must verify that both `fromParticipantId` and `toParticipantId` exist in your users table. |
+| onCreateConversationParticipant(handler: function) | conversationId: string, participantId: string, conversationParticipantLimit: number, conversationLimitPerParticipant: number | - | Should atomically add the participant only if the conversation has fewer than `conversationParticipantLimit`, the participant is not already in it, and the participant is in fewer than `conversationLimitPerParticipant` conversations. Throw if any condition fails. |
 | onCreateConversationParticipantActivity(handler: function) | participantActivity: ParticipantActivity | - | Should create a participant activity entry in the database. Guard the insert with a participation check so activity is not created for participants who concurrently left the conversation. |
 
 **Read handlers:**

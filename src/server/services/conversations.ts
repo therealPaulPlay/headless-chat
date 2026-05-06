@@ -77,8 +77,8 @@ export async function createInviteAdmin(ctx: ServerContext, fromParticipantId: s
         conversation,
         createdAt: now(),
     };
-    // Handler dedupes on the triple, throws if recipient is already a participant, returns inserted: false on a dedup no-op so we skip the broadcast + hook
-    const { inserted } = await getHandler(ctx.handlers, "createInvite")(invite);
+    // Handler dedupes on the triple, throws if recipient is already a participant or sender is at the outgoing-invite cap, returns inserted: false on a dedup no-op so we skip the broadcast + hook
+    const { inserted } = await getHandler(ctx.handlers, "createInvite")(invite, ctx.rateLimits.inviteLimitPerParticipant);
     if (!inserted) return { result: undefined, hooks: [] };
     ctx.subscriptions.emit(ctx.subscriptions.prepareInvite(invite));
     return { result: undefined, hooks: [() => fireHook(ctx.handlers, "afterInviteCreated", invite)] };

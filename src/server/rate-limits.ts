@@ -43,7 +43,7 @@ export class RateLimiter {
         const state = this.get(participantId); // Get state instance
         const now = Date.now();
         state.prune(now); // Prune it
-        if (state.invites.length >= this.limits.inviteLimitPerHour) throw new Error("Invite hourly rate limit exceeded");
+        if (state.invites.length >= this.limits.inviteLimitPerParticipantPerHour) throw new Error("Invite hourly rate limit exceeded");
         state.invites.push(now); // Track entry
     }
 
@@ -51,7 +51,7 @@ export class RateLimiter {
         const state = this.get(participantId); // Get state instance
         const now = Date.now();
         state.prune(now); // Prune it
-        if (state.messages.length >= this.limits.messageLimitPerSecond) throw new Error("Message rate limit exceeded");
+        if (state.messages.length >= this.limits.messageLimitPerParticipantPerSecond) throw new Error("Message rate limit exceeded");
         state.messages.push(now); // Track entry
     }
 

@@ -584,7 +584,7 @@ describe("mixed real-world scenarios", () => {
     });
 
     test("rate limits message sends", async () => {
-        const tight = new FakeTransport({ messageLimitPerSecond: 2 });
+        const tight = new FakeTransport({ messageLimitPerParticipantPerSecond: 2 });
         try {
             const alice = tight.addClient("alice");
             const bob = tight.addClient("bob");
@@ -1369,8 +1369,8 @@ describe("admin functions", () => {
         expect(transport.store.invites.find(i => i.conversation.conversationId === conversationId && i.toParticipantId === "bob")).toBeTruthy();
     });
 
-    test("createInvite admin bypasses inviteLimitPerHour rate limit", async () => {
-        const tight = new FakeTransport({ inviteLimitPerHour: 1 });
+    test("createInvite admin bypasses inviteLimitPerParticipantPerHour rate limit", async () => {
+        const tight = new FakeTransport({ inviteLimitPerParticipantPerHour: 1 });
         try {
             tight.server.onParticipantAuth(() => false); // Block client-side auth
             tight.store.users.add("alice");
@@ -1429,7 +1429,7 @@ describe("admin functions", () => {
     });
 
     test("sendMessage admin bypasses participantAuth, rate limit, and profanity check", async () => {
-        const tight = new FakeTransport({ messageLimitPerSecond: 1 });
+        const tight = new FakeTransport({ messageLimitPerParticipantPerSecond: 1 });
         try {
             tight.server.onParticipantAuth(() => false); // Block client-side auth
             tight.server.onProfanityCheckBlock(() => false); // Reject everything
@@ -1596,7 +1596,7 @@ describe("admin functions", () => {
     test("stop halts the periodic indicator and rate-limit sweeps so they no longer fire after the call returns", async () => {
         // Tight intervals so a sweep would fire well within the test window if stop() did not halt it
         const tight = new FakeTransport(
-            { sweepIntervalSeconds: 1, messageLimitPerSecond: 5 },
+            { sweepIntervalSeconds: 1, messageLimitPerParticipantPerSecond: 5 },
             { indicatorTtlSeconds: 1, indicatorCleanupIntervalSeconds: 1 },
         );
         try {
@@ -2325,8 +2325,8 @@ describe("getMessages cursor semantics", () => {
 });
 
 describe("rate limit and capacity cap behaviors", () => {
-    test("messageLimitPerSecond is enforced per sender, not globally", async () => {
-        const tight = new FakeTransport({ messageLimitPerSecond: 1 });
+    test("messageLimitPerParticipantPerSecond is enforced per sender, not globally", async () => {
+        const tight = new FakeTransport({ messageLimitPerParticipantPerSecond: 1 });
         try {
             const alice = tight.addClient("alice");
             const bob = tight.addClient("bob");
@@ -2375,8 +2375,8 @@ describe("rate limit and capacity cap behaviors", () => {
         }
     });
 
-    test("inviteLimitPerHour is enforced per sender, not globally", async () => {
-        const tight = new FakeTransport({ inviteLimitPerHour: 1 });
+    test("inviteLimitPerParticipantPerHour is enforced per sender, not globally", async () => {
+        const tight = new FakeTransport({ inviteLimitPerParticipantPerHour: 1 });
         try {
             const alice = tight.addClient("alice");
             const bob = tight.addClient("bob");
@@ -2392,6 +2392,55 @@ describe("rate limit and capacity cap behaviors", () => {
             await expect(bob.createInvite(bobConv, "carol")).resolves.toBeUndefined();
         } finally {
             tight.stop();
+        }
+    });
+
+    test("inviteLimitPerParticipant blocks createInvite once the sender has the cap of pending outgoing invites, the cap recovers after revoke/decline/accept frees a slot, and the admin path is also enforced", async () => {
+        const tight = new FakeTransport({ inviteLimitPerParticipant: 2, inviteLimitPerParticipantPerHour: 1000 });
+        try {
+            const alice = tight.addClient("alice");
+            const bob = tight.addClient("bob");
+            const carol = tight.addClient("carol");
+            tight.addClient("dave");
+            const conversationId = await alice.createConversation();
+
+            await alice.createInvite(conversationId, "bob");
+            await alice.createInvite(conversationId, "carol");
+            // Alice has 2 pending outgoing invites, hitting the cap
+            await expect(alice.createInvite(conversationId, "dave")).rejects.toThrow(/outgoing invite limit/i);
+            // Admin path is also enforced
+            await expect(tight.server.createInvite(conversationId, "alice", "dave")).rejects.toThrow(/outgoing invite limit/i);
+
+            // Revoke frees a slot
+            await alice.revokeInvite(conversationId, "bob");
+            await alice.createInvite(conversationId, "dave");
+            // Cap reached again
+            await expect(tight.server.createInvite(conversationId, "alice", "bob")).rejects.toThrow(/outgoing invite limit/i);
+
+            // Decline frees a slot, alice's outgoing invite to carol gets removed
+            await carol.declineInvite(conversationId);
+            await alice.createInvite(conversationId, "bob");
+            // Cap reached again
+            await expect(alice.createInvite(conversationId, "carol")).rejects.toThrow(/outgoing invite limit/i);
+
+            // Accept frees a slot, alice's outgoing invite to bob gets removed
+            await bob.acceptInvite(conversationId);
+            await expect(alice.createInvite(conversationId, "carol")).resolves.toBeUndefined();
+        } finally {
+            tight.stop();
+        }
+    });
+
+    test("inviteLimitPerParticipant defaults to 50 when unset", async () => {
+        const t = new FakeTransport({ inviteLimitPerParticipantPerHour: 1000 });
+        try {
+            const alice = t.addClient("alice");
+            for (let i = 0; i < 51; i++) t.addClient(`recipient-${i}`);
+            const conversationId = await alice.createConversation();
+            for (let i = 0; i < 50; i++) await alice.createInvite(conversationId, `recipient-${i}`);
+            await expect(alice.createInvite(conversationId, "recipient-50")).rejects.toThrow(/outgoing invite limit/i);
+        } finally {
+            t.stop();
         }
     });
 
@@ -2491,7 +2540,7 @@ describe("rate limit and capacity cap behaviors", () => {
 
     test("the periodic rate-limiter sweep prunes per-participant independently: an expired participant's state is removed while a fresh participant's state survives", async () => {
         // Tight sweep so the test can advance real time and observe the prune. Use the admin path to add bob, otherwise alice's createInvite would leave a fresh invite entry in alice's state and keep her state alive too
-        const tight = new FakeTransport({ sweepIntervalSeconds: 1, messageLimitPerSecond: 5 });
+        const tight = new FakeTransport({ sweepIntervalSeconds: 1, messageLimitPerParticipantPerSecond: 5 });
         try {
             const alice = tight.addClient("alice");
             const bob = tight.addClient("bob");
@@ -3907,7 +3956,7 @@ describe("database call counts sanity checks", () => {
     });
 
     test("daily messageAfterDays cleanup makes a constant number of DB calls regardless of how many conversations have expiring messages", async () => {
-        const tight = new FakeTransport({ messageLimitPerSecond: 1000 }, { messageAfterDays: 1 });
+        const tight = new FakeTransport({ messageLimitPerParticipantPerSecond: 1000 }, { messageAfterDays: 1 });
         try {
             // Build up many conversations (just over the threshold of "many") and put one expiring message in each so they all qualify for the marker post
             const N = 50;
@@ -3968,7 +4017,7 @@ describe("database call counts sanity checks", () => {
     });
 
     test("daily inviteAfterDays cleanup makes a constant number of DB calls regardless of how many invites expire", async () => {
-        const tight = new FakeTransport({ inviteLimitPerHour: 10000 }, { inviteAfterDays: 1 });
+        const tight = new FakeTransport({ inviteLimitPerParticipantPerHour: 10000 }, { inviteAfterDays: 1 });
         try {
             const N = 50;
             const sender = tight.addClient("sender");

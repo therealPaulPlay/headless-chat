@@ -81,10 +81,10 @@ export class InMemoryStore {
 
         // Create handlers -------------------------------------------------------------------
 
-        server.onCreateConversation((record, creatorParticipantId, maxConversationsPerParticipant) => {
+        server.onCreateConversation((record, creatorParticipantId, conversationLimitPerParticipant) => {
             this.bump("createConversation");
             // Atomic in JS, mirrors the consumer's transaction (per-participant cap check + insert conversation + insert creator seat)
-            if (this.countConversationsForParticipant(creatorParticipantId) >= maxConversationsPerParticipant) {
+            if (this.countConversationsForParticipant(creatorParticipantId) >= conversationLimitPerParticipant) {
                 throw new Error("Per-participant conversation limit exceeded");
             }
             this.conversations.set(record.conversationId, { ...record });
@@ -131,7 +131,7 @@ export class InMemoryStore {
             message.reactions.push({ ...reaction });
             this.reactions.set(reaction.reactionId, { ...reaction });
         });
-        server.onCreateInvite(invite => {
+        server.onCreateInvite((invite, inviteLimitPerParticipant) => {
             this.bump("createInvite");
             const conversationId = invite.conversation.conversationId;
 
@@ -143,6 +143,10 @@ export class InMemoryStore {
             // Check if already a participant of this conversation
             if (this.isParticipant(conversationId, invite.toParticipantId)) throw new Error("Already a participant");
 
+            // Per-participant outgoing invite cap, atomic with the dedup check below so the count cannot regress between read and insert
+            const outgoing = this.invites.filter(i => i.fromParticipantId === invite.fromParticipantId).length;
+            if (outgoing >= inviteLimitPerParticipant) throw new Error("Outgoing invite limit exceeded");
+
             // Dedup on the triple (conversationId, fromParticipantId, toParticipantId) - multiple senders can invite the same recipient
             const existing = this.invites.find(i =>
                 i.conversation.conversationId === conversationId
@@ -152,13 +156,13 @@ export class InMemoryStore {
             this.invites.push({ ...invite });
             return { inserted: true };
         });
-        server.onCreateConversationParticipant((conversationId, participantId, maxParticipants, maxConversationsPerParticipant) => {
+        server.onCreateConversationParticipant((conversationId, participantId, conversationParticipantLimit, conversationLimitPerParticipant) => {
             this.bump("createConversationParticipant");
             const set = this.conversationParticipants.get(conversationId);
             if (!set) throw new Error("Conversation not found");
             if (set.has(participantId)) throw new Error("Already a participant");
-            if (set.size >= maxParticipants) throw new Error("Conversation is full");
-            if (this.countConversationsForParticipant(participantId) >= maxConversationsPerParticipant) {
+            if (set.size >= conversationParticipantLimit) throw new Error("Conversation is full");
+            if (this.countConversationsForParticipant(participantId) >= conversationLimitPerParticipant) {
                 throw new Error("Per-participant conversation limit exceeded");
             }
             set.add(participantId);
