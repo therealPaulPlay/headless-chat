@@ -252,6 +252,8 @@ Participant IDs are strings and using stringified numbers over UUIDs work fine.
 
 Timestamp columns must preserve sub-second precision (e.g. MySQL `DATETIME(3)`) since rounding to whole seconds will desync `onParticipantActivity` events from the persisted entries.
 
+Cascading deletions between `hc_` tables are not recommended. The library drives deletions itself to broadcast the corresponding events, cascades that fire outside the library (e.g. when deleting a user) skip those broadcasts.
+
 ## Shared types
 
 #### ConversationRecord
