@@ -11,14 +11,14 @@ type SubscribeMessage = {
     type: "subscribe",
     participantId: string,
     authData: unknown,
-    scope: string,
+    scope: string | string[], // Array bundles multiple scopes in one envelope, server iterates
 }
 
 type UnsubscribeMessage = {
     type: "unsubscribe",
     participantId: string,
     authData: unknown,
-    scope: string,
+    scope: string | string[], // Array bundles multiple scopes in one envelope, server iterates
 }
 
 type ResponseMessage = {

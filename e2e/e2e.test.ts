@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import type { Conversation, Indicator, Invite, Message, ParticipantActivity } from "../src/shared/shared-types.js";
+import { Client } from "../src/client/client.js";
 import { FakeTransport, tick } from "./helpers/wire.js";
 
 describe("mixed real-world scenarios", () => {
@@ -1720,6 +1721,182 @@ describe("subscription handling", () => {
         expect(conversations.length).toBe(preConversations);
         expect(invites.length).toBe(preInvites);
         expect(activities.length).toBe(preActivities);
+    });
+
+    // Build a client wired to the FakeTransport's server but with a dispatch that records every subscribe/unsubscribe envelope so tests can assert envelope counts and bundled scopes
+    function spyClient(participantId: string): { client: Client, envelopes: { type: string, scope: string | string[] }[] } {
+        transport.store.users.add(participantId);
+        const envelopes: { type: string, scope: string | string[] }[] = [];
+        const client: Client = new Client(
+            data => {
+                const envelope = data as { type: string, scope?: string | string[] };
+                if (envelope.type === "subscribe" || envelope.type === "unsubscribe") envelopes.push({ type: envelope.type, scope: envelope.scope! });
+                void transport.server.receive(data);
+            },
+            participantId,
+            () => `token-${participantId}`,
+        );
+        // Register so the FakeTransport's existing server-to-client dispatch routes responses + events back here
+        (transport as unknown as { clients: Map<string, Client> }).clients.set(participantId, client);
+        return { client, envelopes };
+    }
+
+    test("onMany sends a single subscribe envelope for multiple scopes and dispatches events to the right handlers", async () => {
+        const { client, envelopes } = spyClient("alice");
+        const conversationId = await client.createConversation();
+        envelopes.length = 0;
+
+        const conversationEvents: { conversationId: string, data: Conversation | null }[] = [];
+        const inviteEvents: { conversationId: string, toParticipantId: string, data: Invite | null }[] = [];
+        const activityEvents: { conversationId: string, data: ParticipantActivity | null }[] = [];
+
+        await client.onMany([
+            { kind: "conversation", handlers: [e => conversationEvents.push(e)] },
+            { kind: "invite", handlers: [e => inviteEvents.push(e)] },
+            { kind: "participantActivity", handlers: [e => activityEvents.push(e)] },
+        ]);
+
+        // Exactly one subscribe envelope, scope is the array of all three encoded scopes
+        const subs = envelopes.filter(e => e.type === "subscribe");
+        expect(subs).toHaveLength(1);
+        expect(subs[0]?.scope).toEqual(["conversation", "invite", "participantActivity"]);
+
+        // Functional check, the per-scope handler still fires
+        transport.addClient("bob");
+        await client.createInvite(conversationId, "bob");
+        await tick();
+        expect(inviteEvents.find(e => e.conversationId === conversationId && e.toParticipantId === "bob" && e.data !== null)).toBeTruthy();
+    });
+
+    test("onMany skips already-attached handlers and only sends an envelope for genuinely new scopes", async () => {
+        const { client, envelopes } = spyClient("alice");
+        const handler = (_e: { conversationId: string, data: Conversation | null }) => { };
+
+        await client.onConversation(handler);
+        envelopes.length = 0;
+
+        // Re-attaching the same handler is a no-op, no envelope at all
+        await client.onMany([{ kind: "conversation", handlers: [handler] }]);
+        expect(envelopes).toHaveLength(0);
+
+        // Mixing a new scope with the already-subscribed one only sends a subscribe for the new scope
+        await client.onMany([
+            { kind: "conversation", handlers: [handler] },
+            { kind: "invite", handlers: [() => { }] },
+        ]);
+        const subs = envelopes.filter(e => e.type === "subscribe");
+        expect(subs).toHaveLength(1);
+        expect(subs[0]?.scope).toEqual(["invite"]);
+    });
+
+    test("onMany attaches multiple handlers to the same scope without duplicating the server-side subscribe", async () => {
+        const { client, envelopes } = spyClient("alice");
+        const a = (_e: { conversationId: string, data: Conversation | null }) => { };
+        const b = (_e: { conversationId: string, data: Conversation | null }) => { };
+
+        await client.onMany([{ kind: "conversation", handlers: [a, b] }]);
+        const subs = envelopes.filter(e => e.type === "subscribe");
+        expect(subs).toHaveLength(1);
+        expect(subs[0]?.scope).toEqual(["conversation"]);
+    });
+
+    test("onMany supports per-conversation scopes (message, indicators) using conversationId", async () => {
+        const { client, envelopes } = spyClient("alice");
+        const conversationId = await client.createConversation();
+        envelopes.length = 0;
+
+        await client.onMany([
+            { kind: "message", conversationId, handlers: [() => { }] },
+            { kind: "indicators", conversationId, handlers: [() => { }] },
+        ]);
+
+        const subs = envelopes.filter(e => e.type === "subscribe");
+        expect(subs).toHaveLength(1);
+        expect(subs[0]?.scope).toEqual([`message:${conversationId}`, `indicators:${conversationId}`]);
+    });
+
+    test("offMany sends a single unsubscribe envelope only for scopes whose last handler was removed", async () => {
+        const { client, envelopes } = spyClient("alice");
+        const convA = (_e: { conversationId: string, data: Conversation | null }) => { };
+        const convB = (_e: { conversationId: string, data: Conversation | null }) => { };
+        const inviteHandler = (_e: { conversationId: string, toParticipantId: string, data: Invite | null }) => { };
+
+        await client.onMany([
+            { kind: "conversation", handlers: [convA, convB] },
+            { kind: "invite", handlers: [inviteHandler] },
+        ]);
+        envelopes.length = 0;
+
+        // Removing one of two conversation handlers leaves the scope subscribed, no envelope
+        await client.offMany([{ kind: "conversation", handlers: [convA] }]);
+        expect(envelopes).toHaveLength(0);
+
+        // Removing the last conversation handler AND the invite handler bundles into one unsubscribe envelope
+        await client.offMany([
+            { kind: "conversation", handlers: [convB] },
+            { kind: "invite", handlers: [inviteHandler] },
+        ]);
+        const unsubs = envelopes.filter(e => e.type === "unsubscribe");
+        expect(unsubs).toHaveLength(1);
+        expect(unsubs[0]?.scope).toEqual(["conversation", "invite"]);
+    });
+
+    test("offMany silently ignores handlers that were never attached", async () => {
+        const { client, envelopes } = spyClient("alice");
+        const stranger = (_e: { conversationId: string, data: Conversation | null }) => { };
+
+        await client.offMany([{ kind: "conversation", handlers: [stranger] }]);
+        expect(envelopes).toHaveLength(0);
+    });
+
+    test("handlers attached via on* can be removed via offMany and vice versa, the bookkeeping is shared", async () => {
+        const { client, envelopes } = spyClient("alice");
+
+        // Attach one handler with onConversation, another with onMany on the same scope
+        const h1 = (_e: { conversationId: string, data: Conversation | null }) => { };
+        const h2 = (_e: { conversationId: string, data: Conversation | null }) => { };
+        await client.onConversation(h1);
+        await client.onMany([{ kind: "conversation", handlers: [h2] }]);
+        // Only the very first attach hit the server, the second piggybacks on the existing subscription
+        expect(envelopes.filter(e => e.type === "subscribe")).toHaveLength(1);
+        envelopes.length = 0;
+
+        // Remove the onConversation-attached handler via offMany, the scope still has h2 so no envelope
+        await client.offMany([{ kind: "conversation", handlers: [h1] }]);
+        expect(envelopes).toHaveLength(0);
+
+        // Remove the onMany-attached handler via offConversation, the last handler is gone so an unsubscribe fires
+        await client.offConversation(h2);
+        const unsubs = envelopes.filter(e => e.type === "unsubscribe");
+        expect(unsubs).toHaveLength(1);
+        expect(unsubs[0]?.scope).toBe("conversation");
+    });
+
+    test("dispose sends a single unsubscribe envelope bundling every active scope", async () => {
+        const { client, envelopes } = spyClient("alice");
+        const conversationId = await client.createConversation();
+
+        // Subscribe to a mix of global and per-conversation scopes so the bundling has something interesting to do
+        await client.onMessage(conversationId, () => { });
+        await client.onConversation(() => { });
+        await client.onIndicators(conversationId, () => { });
+        envelopes.length = 0;
+
+        client.dispose();
+        // dispose's unsubscribe is fired as a floating promise (async getAuthData), let the microtask flush before asserting
+        await tick();
+
+        const unsubs = envelopes.filter(e => e.type === "unsubscribe");
+        expect(unsubs).toHaveLength(1);
+        expect(unsubs[0]?.scope).toEqual(expect.arrayContaining(["conversation", `message:${conversationId}`, `indicators:${conversationId}`]));
+        expect((unsubs[0]?.scope as string[]).length).toBe(3);
+    });
+
+    test("dispose with no active subscriptions sends no envelope", async () => {
+        const { client, envelopes } = spyClient("alice");
+        client.dispose();
+        await tick();
+        expect(envelopes).toHaveLength(0);
     });
 });
 

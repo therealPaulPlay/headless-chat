@@ -12,6 +12,14 @@ type ConversationEvent = { conversationId: string, data: Conversation | null };
 type InviteEvent = { conversationId: string, toParticipantId: string, data: Invite | null };
 type ParticipantActivityEvent = { conversationId: string, data: ParticipantActivity | null };
 
+// Entry shape for onMany/offMany, kind discriminates the handler signature and whether a conversationId is required
+export type SubscriptionEntry =
+    | { kind: "message", conversationId: string, handlers: ((message: Message) => void)[] }
+    | { kind: "indicators", conversationId: string, handlers: ((indicators: Indicator[]) => void)[] }
+    | { kind: "conversation", handlers: ((event: ConversationEvent) => void)[] }
+    | { kind: "invite", handlers: ((event: InviteEvent) => void)[] }
+    | { kind: "participantActivity", handlers: ((event: ParticipantActivityEvent) => void)[] };
+
 export class Client {
     private dispatch: ClientDispatch;
     private participantId: string;
@@ -36,9 +44,8 @@ export class Client {
 
         // Tell the server to stop pushing for every scope still subscribed locally, the consumer may keep the transport alive (eg. just swapping client instances) so we can't rely on disconnect-driven cleanupParticipant
         // Best-effort only, if the transport is already torn down the dispatch failure is swallowed, since dispose itself shouldn't throw
-        for (const scope of this.scopeHandlers.keys()) {
-            this.sendEnvelope({ type: "unsubscribe", scope }).catch(() => { });
-        }
+        const scopes = [...this.scopeHandlers.keys()];
+        if (scopes.length > 0) this.sendEnvelope({ type: "unsubscribe", scope: scopes }).catch(() => { });
         this.scopeHandlers.clear();
         this.handlerScope.clear();
     }
@@ -94,32 +101,38 @@ export class Client {
     }
 
     private async subscribe(scope: string, handler: AnyHandler): Promise<void> {
-        // Track the handler locally and remember which scope it belongs to so off* can find it
-        let set = this.scopeHandlers.get(scope);
-        const isFirst = !set;
-        if (!set) { set = new Set(); this.scopeHandlers.set(scope, set); }
-        set.add(handler);
-        this.handlerScope.set(handler, scope);
-
-        // Only inform the server on the first handler for this scope, subsequent calls are local-only
-        if (isFirst) await this.sendEnvelope({ type: "subscribe", scope });
+        // Track the handler locally, only inform the server on the first handler for this scope
+        if (this.attachHandler(scope, handler)) await this.sendEnvelope({ type: "subscribe", scope });
     }
 
     private async unsubscribe(handler: AnyHandler): Promise<void> {
-        // Look up which scope this handler was registered under
+        // Only inform the server when the last handler for the scope is removed
+        const scope = this.detachHandler(handler);
+        if (scope !== null) await this.sendEnvelope({ type: "unsubscribe", scope });
+    }
+
+    // Attach a handler to a scope locally, returns true if this is the first handler for the scope
+    private attachHandler(scope: string, handler: AnyHandler): boolean {
+        let set = this.scopeHandlers.get(scope);
+        const isFirst = !set;
+        if (!set) { set = new Set(); this.scopeHandlers.set(scope, set); }
+        if (set.has(handler)) return false; // Already attached, no-op
+        set.add(handler);
+        this.handlerScope.set(handler, scope);
+        return isFirst;
+    }
+
+    // Detach a handler locally, returns the scope to unsubscribe from if this was the last handler, or null otherwise
+    private detachHandler(handler: AnyHandler): string | null {
         const scope = this.handlerScope.get(handler);
-        if (!scope) return;
+        if (!scope) return null;
         this.handlerScope.delete(handler);
-
         const set = this.scopeHandlers.get(scope);
-        if (!set) return;
+        if (!set) return null;
         set.delete(handler);
-
-        // Only inform the server when the last handler for this scope is removed
-        if (set.size === 0) {
-            this.scopeHandlers.delete(scope);
-            await this.sendEnvelope({ type: "unsubscribe", scope });
-        }
+        if (set.size > 0) return null;
+        this.scopeHandlers.delete(scope);
+        return scope;
     }
 
     // RPC: conversations -------------------------------------------------
@@ -223,5 +236,36 @@ export class Client {
     }
     offParticipantActivity(handler: (event: ParticipantActivityEvent) => void): Promise<void> {
         return this.unsubscribe(handler as AnyHandler);
+    }
+
+    // Bundle multiple subscriptions in a single envelope to avoid one round-trip per scope on cold start
+    // Handlers already attached to a scope are silently skipped, scopes that gain their first handler are batched into one subscribe envelope
+    onMany(entries: SubscriptionEntry[]): Promise<void> {
+        const scopesToSubscribe: string[] = [];
+        for (const entry of entries) {
+            const scope = entry.kind === "message" || entry.kind === "indicators"
+                ? encodeScope({ kind: entry.kind, conversationId: entry.conversationId })
+                : encodeScope({ kind: entry.kind });
+            for (const handler of entry.handlers) {
+                if (this.attachHandler(scope, handler as AnyHandler) && !scopesToSubscribe.includes(scope)) {
+                    scopesToSubscribe.push(scope);
+                }
+            }
+        }
+        if (scopesToSubscribe.length === 0) return Promise.resolve();
+        return this.sendEnvelope({ type: "subscribe", scope: scopesToSubscribe });
+    }
+
+    // Mirror of onMany, only scopes whose last handler is removed get bundled into the unsubscribe envelope
+    offMany(entries: SubscriptionEntry[]): Promise<void> {
+        const scopesToUnsubscribe: string[] = [];
+        for (const entry of entries) {
+            for (const handler of entry.handlers) {
+                const scope = this.detachHandler(handler as AnyHandler);
+                if (scope !== null) scopesToUnsubscribe.push(scope);
+            }
+        }
+        if (scopesToUnsubscribe.length === 0) return Promise.resolve();
+        return this.sendEnvelope({ type: "unsubscribe", scope: scopesToUnsubscribe });
     }
 }

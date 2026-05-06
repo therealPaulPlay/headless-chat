@@ -144,8 +144,16 @@ export class Server {
 
         // Route to protocol-level handlers
         if (message.type === "request") return this.handleRequest(message.participantId, message.requestId, message.method, message.args);
-        if (message.type === "subscribe") return this.handleSubscribe(message.participantId, message.scope);
-        if (message.type === "unsubscribe") return this.handleUnsubscribe(message.participantId, message.scope);
+        if (message.type === "subscribe") {
+            const scopes = Array.isArray(message.scope) ? message.scope : [message.scope];
+            for (const scope of scopes) this.handleSubscribe(message.participantId, scope);
+            return;
+        }
+        if (message.type === "unsubscribe") {
+            const scopes = Array.isArray(message.scope) ? message.scope : [message.scope];
+            for (const scope of scopes) this.handleUnsubscribe(message.participantId, scope);
+            return;
+        }
     }
 
     private async verifyAuth(participantId: string, authData: unknown): Promise<boolean> {
