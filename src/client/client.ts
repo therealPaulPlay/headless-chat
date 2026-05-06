@@ -256,14 +256,13 @@ export class Client {
         return this.sendEnvelope({ type: "subscribe", scope: scopesToSubscribe });
     }
 
-    // Mirror of onMany, only scopes whose last handler is removed get bundled into the unsubscribe envelope
-    offMany(entries: SubscriptionEntry[]): Promise<void> {
+    // Bundled counterpart to off* methods, takes handlers directly since each handler's scope is already tracked from the original attach
+    // Only scopes whose last handler is removed are bundled into a single unsubscribe envelope
+    offMany(handlers: ((...args: never[]) => void)[]): Promise<void> {
         const scopesToUnsubscribe: string[] = [];
-        for (const entry of entries) {
-            for (const handler of entry.handlers) {
-                const scope = this.detachHandler(handler as AnyHandler);
-                if (scope !== null) scopesToUnsubscribe.push(scope);
-            }
+        for (const handler of handlers) {
+            const scope = this.detachHandler(handler as AnyHandler);
+            if (scope !== null) scopesToUnsubscribe.push(scope);
         }
         if (scopesToUnsubscribe.length === 0) return Promise.resolve();
         return this.sendEnvelope({ type: "unsubscribe", scope: scopesToUnsubscribe });

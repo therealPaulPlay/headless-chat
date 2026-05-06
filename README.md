@@ -91,7 +91,7 @@ Event methods are async because subscribing and unsubscribing roundtrip to the s
 | async onParticipantActivity(handler: function) | event: { conversationId: string, data: ParticipantActivity \| null } | Subscribe to live updates of the calling participant's read state. `data: null` means the activity was deleted. |
 | async offParticipantActivity(handler: function) | - | Unsubscribe a handler. |
 | async onMany(entries: SubscriptionEntry[]) | - | Bundle multiple subscriptions into one network round-trip. Each entry is `{ kind, handlers, conversationId? }` where `kind` is one of `"message" \| "indicators" \| "conversation" \| "invite" \| "participantActivity"`, `handlers` is an array of handlers for that scope, and `conversationId` is required for `"message"` and `"indicators"`. |
-| async offMany(entries: SubscriptionEntry[]) | - | Mirror of `onMany`, unsubscribes the listed handlers. |
+| async offMany(handlers: function[]) | - | Bundled counterpart, takes handlers directly since each handler's scope was tracked when it was attached. Bundles a single unsubscribe envelope. |
 
 ## Server API
 

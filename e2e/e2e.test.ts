@@ -1828,14 +1828,11 @@ describe("subscription handling", () => {
         envelopes.length = 0;
 
         // Removing one of two conversation handlers leaves the scope subscribed, no envelope
-        await client.offMany([{ kind: "conversation", handlers: [convA] }]);
+        await client.offMany([convA]);
         expect(envelopes).toHaveLength(0);
 
         // Removing the last conversation handler AND the invite handler bundles into one unsubscribe envelope
-        await client.offMany([
-            { kind: "conversation", handlers: [convB] },
-            { kind: "invite", handlers: [inviteHandler] },
-        ]);
+        await client.offMany([convB, inviteHandler]);
         const unsubs = envelopes.filter(e => e.type === "unsubscribe");
         expect(unsubs).toHaveLength(1);
         expect(unsubs[0]?.scope).toEqual(["conversation", "invite"]);
@@ -1845,8 +1842,42 @@ describe("subscription handling", () => {
         const { client, envelopes } = spyClient("alice");
         const stranger = (_e: { conversationId: string, data: Conversation | null }) => { };
 
-        await client.offMany([{ kind: "conversation", handlers: [stranger] }]);
+        await client.offMany([stranger]);
         expect(envelopes).toHaveLength(0);
+    });
+
+    test("offMany unsubscribes per-conversation scopes by handler identity, leaving other conversations of the same kind untouched", async () => {
+        const { client, envelopes } = spyClient("alice");
+        const convA = await client.createConversation();
+        const convB = await client.createConversation();
+
+        const messageHandlerA = (_m: Message) => { };
+        const messageHandlerB = (_m: Message) => { };
+        const indicatorHandlerA = (_i: Indicator[]) => { };
+        const indicatorHandlerB = (_i: Indicator[]) => { };
+
+        await client.onMany([
+            { kind: "message", conversationId: convA, handlers: [messageHandlerA] },
+            { kind: "message", conversationId: convB, handlers: [messageHandlerB] },
+            { kind: "indicators", conversationId: convA, handlers: [indicatorHandlerA] },
+            { kind: "indicators", conversationId: convB, handlers: [indicatorHandlerB] },
+        ]);
+        envelopes.length = 0;
+
+        // Off only convA's handlers, convB's must remain subscribed
+        await client.offMany([messageHandlerA, indicatorHandlerA]);
+        const unsubs = envelopes.filter(e => e.type === "unsubscribe");
+        expect(unsubs).toHaveLength(1);
+        expect(unsubs[0]?.scope).toEqual([`message:${convA}`, `indicators:${convA}`]);
+
+        // convB's scopes are still active, sending a message on convB should reach messageHandlerB
+        let convBMessageReceived = false;
+        const tracking = (_m: Message) => { convBMessageReceived = true; };
+        // Replace the noop handler with a tracking one for convB by attaching it (existing scope, no envelope)
+        await client.onMessage(convB, tracking);
+        await client.sendMessage(convB, "hello convB");
+        await tick();
+        expect(convBMessageReceived).toBe(true);
     });
 
     test("handlers attached via on* can be removed via offMany and vice versa, the bookkeeping is shared", async () => {
@@ -1862,7 +1893,7 @@ describe("subscription handling", () => {
         envelopes.length = 0;
 
         // Remove the onConversation-attached handler via offMany, the scope still has h2 so no envelope
-        await client.offMany([{ kind: "conversation", handlers: [h1] }]);
+        await client.offMany([h1]);
         expect(envelopes).toHaveLength(0);
 
         // Remove the onMany-attached handler via offConversation, the last handler is gone so an unsubscribe fires
