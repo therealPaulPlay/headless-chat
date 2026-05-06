@@ -1929,6 +1929,108 @@ describe("subscription handling", () => {
         await tick();
         expect(envelopes).toHaveLength(0);
     });
+
+    // Build a client with an async dispatch we can flip between succeeding and rejecting on demand
+    function asyncDispatchClient(): { client: Client, fail: { value: boolean } } {
+        const fail = { value: false };
+        const client: Client = new Client(
+            async () => {
+                await Promise.resolve(); // Force async boundary so the rejection is a true async one
+                if (fail.value) throw new Error("dispatch failed");
+            },
+            "alice",
+            () => "token-alice",
+        );
+        return { client, fail };
+    }
+
+    test("async dispatch rejection on subscribe throws and rolls back the local attach so a retry from a clean state works", async () => {
+        const { client, fail } = asyncDispatchClient();
+        const handler = (_e: { conversationId: string, data: Conversation | null }) => { };
+
+        fail.value = true;
+        await expect(client.onConversation(handler)).rejects.toThrow(/dispatch failed/);
+
+        // Rollback: handler is no longer locally attached, retrying from a clean state succeeds
+        fail.value = false;
+        await expect(client.onConversation(handler)).resolves.toBeUndefined();
+    });
+
+    test("async dispatch rejection on unsubscribe throws and rolls back the local detach so the handler keeps receiving until the consumer retries", async () => {
+        const { client, fail } = asyncDispatchClient();
+        const handler = (_e: { conversationId: string, data: Conversation | null }) => { };
+
+        await client.onConversation(handler);
+        fail.value = true;
+        await expect(client.offConversation(handler)).rejects.toThrow(/dispatch failed/);
+
+        // Rollback: handler is still attached so re-attaching is a no-op (no envelope sent)
+        // We assert this by flipping fail back and seeing that re-subscribing the same handler does NOT throw or send anything new
+        fail.value = false;
+        await expect(client.onConversation(handler)).resolves.toBeUndefined();
+
+        // Now genuinely unsubscribe to confirm the bookkeeping is sane
+        await expect(client.offConversation(handler)).resolves.toBeUndefined();
+    });
+
+    test("async dispatch rejection on onMany throws and rolls back every attach made by the call", async () => {
+        const { client, fail } = asyncDispatchClient();
+        const conversationHandler = (_e: { conversationId: string, data: Conversation | null }) => { };
+        const inviteHandler = (_e: { conversationId: string, toParticipantId: string, data: Invite | null }) => { };
+
+        fail.value = true;
+        await expect(client.onMany([
+            { kind: "conversation", handlers: [conversationHandler] },
+            { kind: "invite", handlers: [inviteHandler] },
+        ])).rejects.toThrow(/dispatch failed/);
+
+        // Rollback: both handlers gone, retry from a clean state works
+        fail.value = false;
+        await expect(client.onMany([
+            { kind: "conversation", handlers: [conversationHandler] },
+            { kind: "invite", handlers: [inviteHandler] },
+        ])).resolves.toBeUndefined();
+    });
+
+    test("async dispatch rejection on onMany rolls back attaches across mixed scopes leaving pre-existing handlers untouched", async () => {
+        const { client, fail } = asyncDispatchClient();
+        const existing = (_e: { conversationId: string, data: Conversation | null }) => { };
+        const newHandler = (_e: { conversationId: string, data: Conversation | null }) => { };
+        const inviteHandler = (_e: { conversationId: string, toParticipantId: string, data: Invite | null }) => { };
+
+        await client.onConversation(existing);
+        fail.value = true;
+        // onMany attaches newHandler to conversation (existing scope, no envelope) AND inviteHandler to invite (new scope, envelope sent and fails)
+        await expect(client.onMany([
+            { kind: "conversation", handlers: [newHandler] },
+            { kind: "invite", handlers: [inviteHandler] },
+        ])).rejects.toThrow(/dispatch failed/);
+
+        // Rollback removed newHandler and inviteHandler but left existing in place, retrying offConversation on existing succeeds
+        fail.value = false;
+        await expect(client.offConversation(existing)).resolves.toBeUndefined();
+    });
+
+    test("async dispatch rejection on offMany throws and rolls back every detach made by the call", async () => {
+        const { client, fail } = asyncDispatchClient();
+        const conversationHandler = (_e: { conversationId: string, data: Conversation | null }) => { };
+        const inviteHandler = (_e: { conversationId: string, toParticipantId: string, data: Invite | null }) => { };
+
+        await client.onConversation(conversationHandler);
+        await client.onInvite(inviteHandler);
+        fail.value = true;
+        await expect(client.offMany([conversationHandler, inviteHandler])).rejects.toThrow(/dispatch failed/);
+
+        // Rollback: both handlers re-attached, retrying offMany from a clean state works
+        fail.value = false;
+        await expect(client.offMany([conversationHandler, inviteHandler])).resolves.toBeUndefined();
+    });
+
+    test("async dispatch rejection on a request rejects the pending RPC promise instead of hanging", async () => {
+        const { client, fail } = asyncDispatchClient();
+        fail.value = true;
+        await expect(client.createConversation()).rejects.toThrow(/dispatch failed/);
+    });
 });
 
 describe("error handling", () => {
@@ -1954,6 +2056,34 @@ describe("error handling", () => {
             await expect(server.createConversation("alice")).resolves.toBeTruthy();
 
             // Alice still got the broadcast despite bob's dispatch throwing
+            expect(aliceReceived.length).toBeGreaterThan(0);
+        } finally {
+            server.stop();
+        }
+    });
+
+    test("safeDispatch swallows async dispatch rejections so other recipients still receive their events and no unhandled rejection escapes", async () => {
+        // Custom transport whose dispatch is async and rejects for bob, succeeds for alice
+        const aliceReceived: unknown[] = [];
+        const server = new (await import("../src/server/server.js")).Server(async (participantId, data) => {
+            await Promise.resolve(); // Force an async boundary so the rejection is genuinely async
+            if (participantId === "bob") throw new Error("bob's dispatch is broken");
+            if (participantId === "alice") aliceReceived.push(data);
+        });
+        try {
+            const store = new (await import("./helpers/store.js")).InMemoryStore();
+            store.register(server);
+            store.users.add("alice");
+            store.users.add("bob");
+            server.onParticipantAuth(() => true);
+
+            await server.receive({ type: "subscribe", participantId: "alice", authData: null, scope: "conversation" });
+            await server.receive({ type: "subscribe", participantId: "bob", authData: null, scope: "conversation" });
+
+            // Admin createConversation triggers broadcast to both, bob's async dispatch rejects but the loop must continue and alice receives the event
+            await expect(server.createConversation("alice")).resolves.toBeTruthy();
+            await tick();
+
             expect(aliceReceived.length).toBeGreaterThan(0);
         } finally {
             server.stop();

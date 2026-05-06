@@ -29,6 +29,8 @@ Constructor: `new Client(dispatch: ClientDispatch, participantId: string, getAut
 
 A function that takes `data: unknown` (a plain object) and sends it to the server, where it is passed to the server's `receive()` method. Encoding is the consumer's choice (JSON, MessagePack etc., as you choose). Can use a realtime protocol, but also works with HTTP requests.
 
+May be sync or return a `Promise<void>`. The library awaits the result, so a thrown error or a rejected promise propagates to the caller of the originating method (e.g. `await client.sendMessage(...)` rejects with the dispatch error).
+
 #### GetAuthData
 
 A function that takes no parameters and returns `authData: unknown` that is sent to the server and used inside `onParticipantAuth` to verify that this participant is authorized as the provided participant ID.
@@ -110,6 +112,8 @@ Constructor: `new Server(dispatch: ServerDispatch, rateLimits?: RateLimitOptions
 #### ServerDispatch
 
 A function that takes `data: unknown` (a plain object) and pushes it to the client, where it is passed to the client's `receive()` method. Encoding is the consumer's choice. Recommended to be used with SSE or WS, but is protocol agnostic.
+
+May be sync or return a `Promise<void>`. The library never propagates dispatch errors, sync throws and async rejections are caught and logged so a single broken transport cannot block fan-out to other recipients.
 
 #### RateLimitOptions
 

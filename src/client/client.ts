@@ -3,7 +3,7 @@ import type { Conversation, Invite, Message, MessageOptions, Indicator, Alias, P
 
 export type { Conversation, Message, MessageOptions, Indicator, Invite, ParticipantActivity, Alias } from "../shared/shared-types.js";
 
-export type ClientDispatch = (data: unknown) => void;
+export type ClientDispatch = (data: unknown) => void | Promise<void>;
 export type GetAuthData = () => unknown | Promise<unknown>;
 
 type AnyHandler = (...args: unknown[]) => void;
@@ -83,7 +83,8 @@ export class Client {
 
     private async sendEnvelope(envelope: object): Promise<void> {
         const authData = await this.getAuthData();
-        this.dispatch({ ...envelope, participantId: this.participantId, authData });
+        // Awaited so an async dispatch's rejection propagates, request() uses this to fail the pending RPC promise instead of hanging
+        await this.dispatch({ ...envelope, participantId: this.participantId, authData });
     }
 
     private async request<T>(method: string, args: unknown[]): Promise<T> {
@@ -102,13 +103,19 @@ export class Client {
 
     private async subscribe(scope: string, handler: AnyHandler): Promise<void> {
         // Track the handler locally, only inform the server on the first handler for this scope
-        if (this.attachHandler(scope, handler)) await this.sendEnvelope({ type: "subscribe", scope });
+        // On dispatch failure, undo the local attach so the consumer can retry from a clean state
+        if (!this.attachHandler(scope, handler)) return;
+        try { await this.sendEnvelope({ type: "subscribe", scope }); }
+        catch (error) { this.detachHandler(handler); throw error; }
     }
 
     private async unsubscribe(handler: AnyHandler): Promise<void> {
         // Only inform the server when the last handler for the scope is removed
+        // On dispatch failure, undo the local detach so the handler keeps receiving events the server is still pushing
         const scope = this.detachHandler(handler);
-        if (scope !== null) await this.sendEnvelope({ type: "unsubscribe", scope });
+        if (scope === null) return;
+        try { await this.sendEnvelope({ type: "unsubscribe", scope }); }
+        catch (error) { this.attachHandler(scope, handler); throw error; }
     }
 
     // Attach a handler to a scope locally, returns true if this is the first handler for the scope
@@ -240,31 +247,41 @@ export class Client {
 
     // Bundle multiple subscriptions in a single envelope to avoid one round-trip per scope on cold start
     // Handlers already attached to a scope are silently skipped, scopes that gain their first handler are batched into one subscribe envelope
-    onMany(entries: SubscriptionEntry[]): Promise<void> {
+    // On dispatch failure, all local attaches done in this call are rolled back so the consumer can retry from a clean state
+    async onMany(entries: SubscriptionEntry[]): Promise<void> {
         const scopesToSubscribe: string[] = [];
+        const attached: AnyHandler[] = []; // Handlers actually attached by this call, used for rollback if dispatch fails
         for (const entry of entries) {
             const scope = entry.kind === "message" || entry.kind === "indicators"
                 ? encodeScope({ kind: entry.kind, conversationId: entry.conversationId })
                 : encodeScope({ kind: entry.kind });
             for (const handler of entry.handlers) {
+                const wasAttached = this.scopeHandlers.get(scope)?.has(handler as AnyHandler) ?? false;
                 if (this.attachHandler(scope, handler as AnyHandler) && !scopesToSubscribe.includes(scope)) {
                     scopesToSubscribe.push(scope);
                 }
+                if (!wasAttached) attached.push(handler as AnyHandler);
             }
         }
-        if (scopesToSubscribe.length === 0) return Promise.resolve();
-        return this.sendEnvelope({ type: "subscribe", scope: scopesToSubscribe });
+        if (scopesToSubscribe.length === 0) return;
+        try { await this.sendEnvelope({ type: "subscribe", scope: scopesToSubscribe }); }
+        catch (error) { for (const handler of attached) this.detachHandler(handler); throw error; }
     }
 
     // Bundled counterpart to off* methods, takes handlers directly since each handler's scope is already tracked from the original attach
     // Only scopes whose last handler is removed are bundled into a single unsubscribe envelope
-    offMany(handlers: ((...args: never[]) => void)[]): Promise<void> {
+    // On dispatch failure, all local detaches done in this call are rolled back so the consumer can retry from a clean state
+    async offMany(handlers: ((...args: never[]) => void)[]): Promise<void> {
         const scopesToUnsubscribe: string[] = [];
+        const detached: { scope: string, handler: AnyHandler }[] = []; // (scope, handler) pairs detached by this call, used for rollback if dispatch fails
         for (const handler of handlers) {
-            const scope = this.detachHandler(handler as AnyHandler);
-            if (scope !== null) scopesToUnsubscribe.push(scope);
+            const previousScope = this.handlerScope.get(handler as AnyHandler);
+            const removedScope = this.detachHandler(handler as AnyHandler);
+            if (previousScope !== undefined) detached.push({ scope: previousScope, handler: handler as AnyHandler });
+            if (removedScope !== null) scopesToUnsubscribe.push(removedScope);
         }
-        if (scopesToUnsubscribe.length === 0) return Promise.resolve();
-        return this.sendEnvelope({ type: "unsubscribe", scope: scopesToUnsubscribe });
+        if (scopesToUnsubscribe.length === 0) return;
+        try { await this.sendEnvelope({ type: "unsubscribe", scope: scopesToUnsubscribe }); }
+        catch (error) { for (const { scope, handler } of detached) this.attachHandler(scope, handler); throw error; }
     }
 }

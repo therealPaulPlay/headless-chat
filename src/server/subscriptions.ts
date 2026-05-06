@@ -83,10 +83,13 @@ export class Subscriptions {
         for (const scope of [...scopes]) this.remove(participantId, scope);
     }
 
-    // Wraps the consumer-supplied dispatch so a thrown transport never propagates into the library
+    // Wraps the consumer-supplied dispatch so a sync throw or async rejection never propagates into the library
+    // Stays synchronous so fan-out to one slow/broken transport does not serialize sends to other recipients
     private safeDispatch(participantId: string, payload: unknown): void {
-        try { this.dispatch(participantId, payload); }
-        catch (error) { logError("dispatch", error); }
+        try {
+            const result = this.dispatch(participantId, payload);
+            if (result instanceof Promise) result.catch(error => logError("dispatch", error));
+        } catch (error) { logError("dispatch", error); }
     }
 
     sendResponse(participantId: string, requestId: string, ok: boolean, data: unknown, error?: string): void {

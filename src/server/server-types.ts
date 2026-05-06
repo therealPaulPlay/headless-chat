@@ -8,7 +8,7 @@ import type {
     Alias,
 } from "../shared/shared-types.js";
 
-export type ServerDispatch = (participantId: string, data: unknown) => void;
+export type ServerDispatch = (participantId: string, data: unknown) => void | Promise<void>;
 
 export type RateLimitOptions = {
     inviteLimitPerParticipantPerHour?: number,
