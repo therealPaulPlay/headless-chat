@@ -90,7 +90,7 @@ Event methods are async because subscribing and unsubscribing roundtrip to the s
 | async offInvite(handler: function) | - | Unsubscribe a handler. |
 | async onParticipantActivity(handler: function) | event: { conversationId: string, data: ParticipantActivity \| null } | Subscribe to live updates of the calling participant's read state. `data: null` means the activity was deleted. |
 | async offParticipantActivity(handler: function) | - | Unsubscribe a handler. |
-| async onMany(entries: SubscriptionEntry[]) | - | Bundle multiple subscriptions into one network round-trip. |
+| async onMany(entries: SubscriptionEntry[]) | - | Subscribe to multiple events, bundled into one network round-trip. |
 | async offMany(handlers: function[]) | - | Unsubscribe from multiple handlers in one bundled request, takes handlers directly. |
 
 #### SubscriptionEntry
