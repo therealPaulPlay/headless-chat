@@ -55,17 +55,27 @@ export class CleanupScheduler {
         const threshold = startedAt - this.cleanup.cacheEntryTtlMinutes * 60 * 1000;
         const activityRemoved = this.ctx.activityCache.sweep(threshold);
         const conversationRemoved = this.ctx.conversationCache.sweep(threshold);
-        logInfo("cache sweep", {
-            activityRemoved, activityRemaining: this.ctx.activityCache.size(),
-            conversationRemoved, conversationRemaining: this.ctx.conversationCache.size(),
-            durationMs: Date.now() - startedAt,
-        });
+        const durationMs = Date.now() - startedAt;
+        
+        // Only log when slow
+        if (durationMs > 50) {
+            logInfo("slow cache sweep", {
+                activityRemoved, activityRemaining: this.ctx.activityCache.size(),
+                conversationRemoved, conversationRemaining: this.ctx.conversationCache.size(),
+                durationMs,
+            });
+        }
     }
 
     private runRateLimits(): void {
         const startedAt = Date.now();
         const { removed, remaining } = this.ctx.rateLimiter.sweep();
-        logInfo("rate limit sweep", { removed, remaining, durationMs: Date.now() - startedAt });
+        const durationMs = Date.now() - startedAt;
+        
+        // Only log when slow
+        if (durationMs > 50) {
+            logInfo("slow rate limit sweep", { removed, remaining, durationMs });
+        }
     }
 
     private async runDaily(): Promise<void> {
