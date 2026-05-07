@@ -2,7 +2,7 @@ import { type ResolvedCleanup, getHandler } from "./server-types.js";
 import { type ServerContext, fireHook } from "./context.js";
 import { emitConversationDeleted } from "./services/conversations.js";
 import { buildMessage } from "./services/messages.js";
-import { logError } from "../shared/log.js";
+import { logError, logInfo } from "../shared/log.js";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -25,7 +25,7 @@ export class CleanupScheduler {
         this.dailyTimer = setInterval(() => void this.runDaily(), ONE_DAY_MS);
         this.dailyTimer.unref?.();
 
-        this.rateLimitSweepTimer = setInterval(() => this.ctx.rateLimiter.sweep(), this.sweepIntervalSeconds * 1000);
+        this.rateLimitSweepTimer = setInterval(() => this.runRateLimits(), this.sweepIntervalSeconds * 1000);
         this.rateLimitSweepTimer.unref?.();
 
         this.cacheSweepTimer = setInterval(() => this.runCaches(), this.cleanup.cacheCleanupIntervalSeconds * 1000);
@@ -45,14 +45,27 @@ export class CleanupScheduler {
 
     private runIndicators(): void {
         // Broadcast affected conversations so subscribers see the post-sweep indicator state
+        // Not logged because work is bounded by active typers & it runs every few seconds (log spam)
         const affected = this.ctx.indicators.sweep(Date.now() - this.cleanup.indicatorTtlSeconds * 1000);
         for (const conversationId of affected) this.ctx.subscriptions.emit(this.ctx.subscriptions.prepareIndicators(conversationId));
     }
 
     private runCaches(): void {
-        const threshold = Date.now() - this.cleanup.cacheEntryTtlMinutes * 60 * 1000;
-        this.ctx.activityCache.sweep(threshold);
-        this.ctx.conversationCache.sweep(threshold);
+        const startedAt = Date.now();
+        const threshold = startedAt - this.cleanup.cacheEntryTtlMinutes * 60 * 1000;
+        const activityRemoved = this.ctx.activityCache.sweep(threshold);
+        const conversationRemoved = this.ctx.conversationCache.sweep(threshold);
+        logInfo("cache sweep", {
+            activityRemoved, activityRemaining: this.ctx.activityCache.size(),
+            conversationRemoved, conversationRemaining: this.ctx.conversationCache.size(),
+            durationMs: Date.now() - startedAt,
+        });
+    }
+
+    private runRateLimits(): void {
+        const startedAt = Date.now();
+        const { removed, remaining } = this.ctx.rateLimiter.sweep();
+        logInfo("rate limit sweep", { removed, remaining, durationMs: Date.now() - startedAt });
     }
 
     private async runDaily(): Promise<void> {
@@ -60,8 +73,10 @@ export class CleanupScheduler {
         if (this.cleanup.messageAfterDays && this.cleanup.messageAfterDays > 0) {
             const handler = getHandler(this.ctx.handlers, "deleteMessagesBefore");
             const threshold = new Date(now - this.cleanup.messageAfterDays * ONE_DAY_MS);
+            const startedAt = Date.now();
             try {
                 const { affectedConversationIds } = await handler(threshold);
+                logInfo("daily messageAfterDays cleanup", { affectedConversations: affectedConversationIds.length, durationMs: Date.now() - startedAt });
 
                 // Post a "messagesRemoved" system message per affected conversation, backdated so it sorts before any surviving message and never bumps lastActivityAt
                 // Not broadcast, live clients still hold the older messages in memory until they refresh
@@ -95,11 +110,14 @@ export class CleanupScheduler {
                     }
                 }
             } catch (error) { logError("deleteMessagesBefore", error); }
+            await new Promise(resolve => setTimeout(resolve, this.cleanup.timeoutBetweenDailyCleanupsSeconds * 1000));
         }
         if (this.cleanup.conversationAfterInactiveDays && this.cleanup.conversationAfterInactiveDays > 0) {
             const handler = getHandler(this.ctx.handlers, "deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore");
+            const startedAt = Date.now();
             try {
                 const { deletedConversations } = await handler(new Date(now - this.cleanup.conversationAfterInactiveDays * ONE_DAY_MS));
+                logInfo("daily conversationAfterInactiveDays cleanup", { deletedConversations: deletedConversations.length, durationMs: Date.now() - startedAt });
                 for (const c of deletedConversations) {
                     // Handler already deleted the rows, just emit the side-effects and invalidate the conversation + activity caches
                     for (const pid of c.formerParticipantIds) this.ctx.activityCache.invalidate(`${c.conversationId}|${pid}`);
@@ -110,11 +128,14 @@ export class CleanupScheduler {
                     for (const hook of hooks) await hook();
                 }
             } catch (error) { logError("deleteConversationsWithMessagesReactionsInvitesAndActivitiesBefore", error); }
+            await new Promise(resolve => setTimeout(resolve, this.cleanup.timeoutBetweenDailyCleanupsSeconds * 1000));
         }
         if (this.cleanup.inviteAfterDays && this.cleanup.inviteAfterDays > 0) {
             const handler = getHandler(this.ctx.handlers, "deleteInvitesBefore");
+            const startedAt = Date.now();
             try {
                 const { deletedInvites } = await handler(new Date(now - this.cleanup.inviteAfterDays * ONE_DAY_MS));
+                logInfo("daily inviteAfterDays cleanup", { deletedInvites: deletedInvites.length, durationMs: Date.now() - startedAt });
                 // Bundle all invite deletions so subscribers see them in one batch
                 this.ctx.subscriptions.emit(...deletedInvites.map(invite => this.ctx.subscriptions.prepareInviteDeleted(invite.conversationId, invite.fromParticipantId, invite.toParticipantId)));
                 for (const invite of deletedInvites) {

@@ -55,12 +55,14 @@ export class RateLimiter {
         state.messages.push(now); // Track entry
     }
 
-    sweep(): void {
-        // Prune all states and delete instances that are fully empty on a schedule
+    sweep(): { removed: number, remaining: number } {
+        // Prune all states and delete instances that are fully empty on a schedule, returns counts for observability
         const now = Date.now();
+        let removed = 0;
         for (const [id, state] of this.states) {
             state.prune(now);
-            if (state.isEmpty()) this.states.delete(id);
+            if (state.isEmpty()) { this.states.delete(id); removed++; }
         }
+        return { removed, remaining: this.states.size };
     }
 }

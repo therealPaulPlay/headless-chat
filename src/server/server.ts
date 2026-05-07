@@ -26,6 +26,11 @@ import * as messagesService from "./services/messages.js";
 import * as indicatorsService from "./services/indicators.js";
 import * as gettersService from "./services/getters.js";
 import * as participantsService from "./services/participants.js";
+import { setInfoLogging } from "../shared/log.js";
+
+export type ServerOptions = {
+    logInfo?: boolean, // Default true, set false to silence the per-sweep and per-cleanup info logs
+};
 
 export class Server {
     private dispatch: ServerDispatch;
@@ -37,8 +42,9 @@ export class Server {
     private scheduler: CleanupScheduler;
     private ctx: ServerContext;
 
-    constructor(dispatch: ServerDispatch, rateLimits: RateLimitOptions = {}, cleanup: CleanupOptions = {}) {
+    constructor(dispatch: ServerDispatch, rateLimits: RateLimitOptions = {}, cleanup: CleanupOptions = {}, options: ServerOptions = {}) {
         this.dispatch = dispatch;
+        setInfoLogging(options.logInfo ?? true);
         this.rateLimits = {
             inviteLimitPerParticipantPerHour: rateLimits.inviteLimitPerParticipantPerHour ?? 10,
             inviteLimitPerParticipant: rateLimits.inviteLimitPerParticipant ?? 50,
@@ -56,6 +62,7 @@ export class Server {
             messageAfterDays: cleanup.messageAfterDays ?? null,
             conversationAfterInactiveDays: cleanup.conversationAfterInactiveDays ?? null,
             inviteAfterDays: cleanup.inviteAfterDays ?? null,
+            timeoutBetweenDailyCleanupsSeconds: cleanup.timeoutBetweenDailyCleanupsSeconds ?? 30,
         };
 
         const indicators = new IndicatorStore();

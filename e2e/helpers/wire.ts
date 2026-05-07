@@ -1,4 +1,4 @@
-import { Server, type RateLimitOptions, type CleanupOptions } from "../../src/server/server.js";
+import { Server, type RateLimitOptions, type CleanupOptions, type ServerOptions } from "../../src/server/server.js";
 import { Client } from "../../src/client/client.js";
 import { InMemoryStore } from "./store.js";
 import type { Cache } from "../../src/server/cache.js";
@@ -10,12 +10,16 @@ export class FakeTransport {
     store: InMemoryStore;
     private clients = new Map<string, Client>();
 
-    constructor(rateLimits?: RateLimitOptions, cleanup?: CleanupOptions) {
+    constructor(rateLimits?: RateLimitOptions, cleanup?: CleanupOptions, options?: ServerOptions) {
         this.store = new InMemoryStore();
+        // Default the inter-cleanup gap to 0 so runDaily tests don't sleep 30s between blocks, callers can override via cleanup option
+        const cleanupWithDefaults: CleanupOptions = { timeoutBetweenDailyCleanupsSeconds: 0, ...cleanup };
+        // Default logInfo to false so tests don't spam stdout
+        const optionsWithDefaults: ServerOptions = { logInfo: false, ...options };
         this.server = new Server((participantId, data) => {
             const client = this.clients.get(participantId);
             if (client) client.receive(data);
-        }, rateLimits, cleanup);
+        }, rateLimits, cleanupWithDefaults, optionsWithDefaults);
         this.store.register(this.server);
     }
 

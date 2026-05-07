@@ -28,6 +28,7 @@ export type CleanupOptions = {
     messageAfterDays?: number | null,
     conversationAfterInactiveDays?: number | null,
     inviteAfterDays?: number | null,
+    timeoutBetweenDailyCleanupsSeconds?: number,
 }
 
 export type ResolvedRateLimits = {
@@ -48,6 +49,7 @@ export type ResolvedCleanup = {
     messageAfterDays: number | null,
     conversationAfterInactiveDays: number | null,
     inviteAfterDays: number | null,
+    timeoutBetweenDailyCleanupsSeconds: number,
 }
 
 export type Handler<Args extends unknown[], R> = (...args: Args) => R | Promise<R>;

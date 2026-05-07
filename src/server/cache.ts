@@ -31,10 +31,16 @@ export class Cache<T> {
         }
     }
 
-    // Evicts entries last written before thresholdMs
-    sweep(thresholdMs: number): void {
+    // Evicts entries last written before thresholdMs, returns the number of entries removed
+    sweep(thresholdMs: number): number {
+        let removed = 0;
         for (const [key, entry] of this.store) {
-            if (entry.lastTouchedMs < thresholdMs) this.store.delete(key);
+            if (entry.lastTouchedMs < thresholdMs) { this.store.delete(key); removed++; }
         }
+        return removed;
+    }
+
+    size(): number {
+        return this.store.size;
     }
 }

@@ -107,7 +107,7 @@ Event methods are async because subscribing and unsubscribing roundtrip to the s
 
 ## Server API
 
-Constructor: `new Server(dispatch: ServerDispatch, rateLimits?: RateLimitOptions, cleanup?: CleanupOptions)`
+Constructor: `new Server(dispatch: ServerDispatch, rateLimits?: RateLimitOptions, cleanup?: CleanupOptions, options?: ServerOptions)`
 
 #### ServerDispatch
 
@@ -144,6 +144,15 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
     messageAfterDays?: number, // Defaults to null = disabled
     conversationAfterInactiveDays?: number, // Defaults to null = disabled, inactive means no new messages have been sent
     inviteAfterDays?: number, // Defaults to null = disabled
+    timeoutBetweenDailyCleanupsSeconds?: number, // Defaults to 30, gap between the daily cleanup blocks so they don't hit the DB right after another
+}
+```
+
+#### ServerOptions
+
+```ts
+{
+    logInfo?: boolean, // Defaults to true, set false to silence info logs
 }
 ```
 

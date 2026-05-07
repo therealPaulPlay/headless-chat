@@ -2601,6 +2601,38 @@ describe("scheduled cleanup", () => {
             transport.stop();
         }
     });
+
+    // Log-toggle tests, setInfoLogging is module-level so each test passes the option explicitly to avoid leaking state across the suite
+
+    test("info logs are emitted when logInfo: true is explicitly set", async () => {
+        const transport = new FakeTransport(undefined, { messageAfterDays: 1 }, { logInfo: true });
+        const logged: string[] = [];
+        const original = console.log;
+        console.log = (msg: unknown) => { if (typeof msg === "string") logged.push(msg); };
+        try {
+            await (transport.server as unknown as { scheduler: { runDaily: () => Promise<void> } }).scheduler.runDaily();
+            await tick();
+            expect(logged.some(m => m.includes("daily messageAfterDays cleanup"))).toBe(true);
+        } finally {
+            console.log = original;
+            transport.stop();
+        }
+    });
+
+    test("info logs are silenced when logInfo: false is set", async () => {
+        const transport = new FakeTransport(undefined, { messageAfterDays: 1 }, { logInfo: false });
+        const logged: string[] = [];
+        const original = console.log;
+        console.log = (msg: unknown) => { if (typeof msg === "string") logged.push(msg); };
+        try {
+            await (transport.server as unknown as { scheduler: { runDaily: () => Promise<void> } }).scheduler.runDaily();
+            await tick();
+            expect(logged.some(m => m.includes("headless-chat"))).toBe(false);
+        } finally {
+            console.log = original;
+            transport.stop();
+        }
+    });
 });
 
 describe("client dispose", () => {
