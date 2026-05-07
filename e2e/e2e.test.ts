@@ -2142,6 +2142,18 @@ describe("error handling", () => {
         }
     });
 
+    test("participantAuth handler that rejects asynchronously is awaited and treated like a sync throw", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            transport.server.onParticipantAuth(async () => { await Promise.resolve(); throw new Error("async auth failure"); });
+
+            await expect(alice.createConversation()).rejects.toThrow(/Unauthorized/);
+        } finally {
+            transport.stop();
+        }
+    });
+
     test("participantAuth returning false rejects the RPC", async () => {
         const transport = new FakeTransport();
         try {
@@ -2201,6 +2213,22 @@ describe("error handling", () => {
         }
     });
 
+    test("inviteAuth handler that rejects asynchronously is awaited and treated like a sync throw", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            transport.addClient("bob");
+            const conversationId = await alice.createConversation();
+
+            transport.server.onInviteAuth(async () => { await Promise.resolve(); throw new Error("async inviteAuth failure"); });
+
+            await expect(alice.createInvite(conversationId, "bob")).rejects.toThrow(/Invite check failed/i);
+            expect(transport.store.invites).toHaveLength(0);
+        } finally {
+            transport.stop();
+        }
+    });
+
     test("onProfanityCheckCensor handler that throws rejects the sendMessage RPC with 'Profanity check failed' and persists nothing", async () => {
         const transport = new FakeTransport();
         try {
@@ -2217,6 +2245,21 @@ describe("error handling", () => {
         }
     });
 
+    test("onProfanityCheckCensor handler that rejects asynchronously is awaited and treated like a sync throw", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            const conversationId = await alice.createConversation();
+
+            transport.server.onProfanityCheckCensor(async () => { await Promise.resolve(); throw new Error("async censor failure"); });
+
+            await expect(alice.sendMessage(conversationId, "anything")).rejects.toThrow(/Profanity check failed/i);
+            expect([...transport.store.messages.values()].some(m => m.conversationId === conversationId && m.systemEvent === null)).toBe(false);
+        } finally {
+            transport.stop();
+        }
+    });
+
     test("onProfanityCheckBlock handler that throws rejects the sendMessage RPC with 'Profanity check failed' and persists nothing", async () => {
         const transport = new FakeTransport();
         try {
@@ -2224,6 +2267,21 @@ describe("error handling", () => {
             const conversationId = await alice.createConversation();
 
             transport.server.onProfanityCheckBlock(() => { throw new Error("block blew up"); });
+
+            await expect(alice.sendMessage(conversationId, "anything")).rejects.toThrow(/Profanity check failed/i);
+            expect([...transport.store.messages.values()].some(m => m.conversationId === conversationId && m.systemEvent === null)).toBe(false);
+        } finally {
+            transport.stop();
+        }
+    });
+
+    test("onProfanityCheckBlock handler that rejects asynchronously is awaited and treated like a sync throw", async () => {
+        const transport = new FakeTransport();
+        try {
+            const alice = transport.addClient("alice");
+            const conversationId = await alice.createConversation();
+
+            transport.server.onProfanityCheckBlock(async () => { await Promise.resolve(); throw new Error("async block failure"); });
 
             await expect(alice.sendMessage(conversationId, "anything")).rejects.toThrow(/Profanity check failed/i);
             expect([...transport.store.messages.values()].some(m => m.conversationId === conversationId && m.systemEvent === null)).toBe(false);
