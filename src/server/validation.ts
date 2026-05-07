@@ -2,8 +2,14 @@ import type { Handlers } from "./server-types.js";
 import { logError } from "../shared/log.js";
 
 export function isValidEmoji(value: string): boolean {
-    if (typeof value !== "string" || value.length === 0 || value.length > 16) return false;
-    return /\p{Extended_Pictographic}/u.test(value);
+    if (typeof value !== "string" || value.length === 0 || value.length > 64) return false;
+    // Reject anything that isn't exactly one user-perceived character (grapheme)
+    // ZWJ sequences, flags, and skin-tone variants are multi-codepoint but render as one grapheme so they pass
+    const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+    const iter = segmenter.segment(value)[Symbol.iterator]();
+    const first = iter.next();
+    if (first.done || !iter.next().done) return false; // Reject if no grapheme or 2+ graphenes
+    return /\p{Extended_Pictographic}/u.test(first.value.segment);
 }
 
 export async function applyProfanityChecks(handlers: Handlers, text: string): Promise<string> {

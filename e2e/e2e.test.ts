@@ -3308,6 +3308,34 @@ describe("message validation and authorization", () => {
         expect(transport.store.reactions.get(reactionId)?.content).toBe("👍");
     });
 
+    test("addReaction rejects multi-emoji strings even when each character is individually a valid emoji, single-grapheme ZWJ sequences and the common single emojis stay accepted", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+        const messageId = await alice.sendMessage(conversationId, "react to me");
+
+        // Multi-emoji strings rejected, each is two or more graphemes
+        await expect(alice.addReaction(messageId, "🍆💦")).rejects.toThrow(/emoji/i);
+        await expect(alice.addReaction(messageId, "🍆💦🍆💦🍆💦🍆💦")).rejects.toThrow(/emoji/i);
+        await expect(alice.addReaction(messageId, "👍👎")).rejects.toThrow(/emoji/i);
+
+        // Emoji with leading/trailing whitespace is rejected, whitespace makes it more than one grapheme
+        await expect(alice.addReaction(messageId, " 👍")).rejects.toThrow(/emoji/i);
+        await expect(alice.addReaction(messageId, "👍 ")).rejects.toThrow(/emoji/i);
+
+        // The four most-used in-app reactions, each is one grapheme even though ❤️ is a 2-codepoint sequence (heart + variation selector)
+        await expect(bob.addReaction(messageId, "😂")).resolves.toBeTruthy();
+        await expect(bob.addReaction(messageId, "❤️")).resolves.toBeTruthy();
+        await expect(bob.addReaction(messageId, "😢")).resolves.toBeTruthy();
+        await expect(bob.addReaction(messageId, "👍")).resolves.toBeTruthy();
+
+        // Single-grapheme ZWJ sequences (family) and skin-tone variants stay accepted, they render as one user-perceived character
+        await expect(alice.addReaction(messageId, "👨‍👩‍👧")).resolves.toBeTruthy();
+        await expect(alice.addReaction(messageId, "👍🏽")).resolves.toBeTruthy();
+    });
+
     test("removeReaction by a non-owner is rejected, the reaction stays in the DB, broadcasts nothing, and the cache stays in sync", async () => {
         const alice = transport.addClient("alice");
         const bob = transport.addClient("bob");
