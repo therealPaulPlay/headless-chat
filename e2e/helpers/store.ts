@@ -287,7 +287,8 @@ export class InMemoryStore {
         });
         server.onReadHasNew(participantId => {
             this.bump("readHasNew");
-            // Unread message exists when any conversation the participant is in has a lastMessage authored by someone else with createdAt newer than the participant's last_read_message_created_at
+            // Unread message exists when any conversation the participant is in has a lastMessage with createdAt newer than the participant's persisted last_read_message_created_at, regardless of authorship
+            // The library only persists activity on getMessages or unsubscribe (subscribed clients track read state in memory), so subscribed clients should derive freshness from the live event streams instead of polling
             const conversationIds = [...this.conversationParticipants.entries()]
                 .filter(([_, set]) => set.has(participantId))
                 .map(([cid]) => cid);
@@ -295,7 +296,6 @@ export class InMemoryStore {
                 const messagesIn = [...this.messages.values()].filter(m => m.conversationId === cid);
                 if (messagesIn.length === 0) return false;
                 const last = messagesIn.reduce((a, b) => a.createdAt.getTime() > b.createdAt.getTime() ? a : b);
-                if (last.participantId === participantId) return false;
                 const activity = this.activities.get(this.activityKey(cid, participantId));
                 const lastReadTs = activity?.lastReadMessageCreatedAt.getTime() ?? 0;
                 return last.createdAt.getTime() > lastReadTs;

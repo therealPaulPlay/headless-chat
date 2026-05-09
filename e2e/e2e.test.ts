@@ -3920,18 +3920,22 @@ describe("getters", () => {
         expect(after.hasNewMessages).toBe(false);
     });
 
-    test("getHasNew does not flag the participant's own messages as new", async () => {
+    test("getHasNew flags the participant's own messages as new until their activity is persisted via getMessages or unsubscribe, mirroring how the library actually persists read state", async () => {
         const alice = transport.addClient("alice");
         const bob = transport.addClient("bob");
         const conversationId = await alice.createConversation();
         await alice.createInvite(conversationId, "bob");
         await bob.acceptInvite(conversationId);
 
+        // Alice sends, but since she has not subscribed to message scope and has not called getMessages, no activity row is written for her
         await alice.sendMessage(conversationId, "from alice");
+        const beforeRead = await alice.getHasNew();
+        expect(beforeRead.hasNewMessages).toBe(true);
 
-        // Alice authored the message, getHasNew for alice should not flag it
-        const aliceResult = await alice.getHasNew();
-        expect(aliceResult.hasNewMessages).toBe(false);
+        // Calling getMessages persists alice's activity to the latest message via checkUpdateActivity, getHasNew flips back to false
+        await alice.getMessages(conversationId, null, false, 50);
+        const afterRead = await alice.getHasNew();
+        expect(afterRead.hasNewMessages).toBe(false);
     });
 
     test("acceptInvite clears hasNewInvites because the underlying invite row is deleted as part of accepting", async () => {

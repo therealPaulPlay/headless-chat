@@ -75,7 +75,7 @@ A function that takes no parameters and returns `authData: unknown` that is sent
 | async getInvites() | invites: Invite[]| Get all invites, both for the participant and by the participant. |
 | async getAliases([participantId: string, participantId...]) | aliases: Alias[] | Get server-defined aliases for participants. This serves as a simple lookup for your server-defined username system. |
 | async getParticipantActivities() | activities: ParticipantActivity[] | Get the calling participant's read state across all their conversations. Used to derive unread counts client-side. |
-| async getHasNew() | { hasNewMessages: boolean, hasNewInvites: boolean } | Single round-trip cheap check for any new activity. |
+| async getHasNew() | { hasNewMessages: boolean, hasNewInvites: boolean } | Cheap single round-trip check for any new activity, intended for the cold-start case before subscriptions are live. Subscribed clients should derive freshness from the live event streams instead. |
 
 Event methods are async because subscribing and unsubscribing roundtrip to the server, so events may take a brief moment to start or stop arriving. Calling the same `on*` method twice for the same scope is allowed (e.g. to listen in two different places).
 
@@ -213,7 +213,7 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onReadAliases(handler: function) | participantIds: string[] | aliases: Alias[] | Should return all aliases for the provided participant IDs. In a simple implementation, this can look up the usernames from an existing users table. |
 | onReadConversationParticipantActivity(handler: function) | conversationId: string, participantId: string | participantActivity: ParticipantActivity \| null | Should return the participant activity from the database or `null` if it does not exist. |
 | onReadParticipantActivities(handler: function) | participantId: string | activities: ParticipantActivity[] | Should return all participant activity rows for the given participant. |
-| onReadHasNew(handler: function) | participantId: string | { hasNewMessages: boolean, hasNewInvites: boolean } | Should return whether the participant has any unseen invites and any conversation where the latest message is newer than their last read pointer and not authored by them. Implement as one query. |
+| onReadHasNew(handler: function) | participantId: string | { hasNewMessages: boolean, hasNewInvites: boolean } | Should return whether the participant has any unseen invites and any conversation where the latest message is newer than their last read pointer. Implement as one query. |
 
 **Update handlers:**
 | Method | Calls with | Should return | Description |
