@@ -3838,6 +3838,146 @@ describe("getters", () => {
         // Empty input short-circuits
         expect(await alice.getMessagesByIds([])).toEqual([]);
     });
+
+    test("invites are minted with seen=false unless the recipient is invite-subscribed at create time, in which case they are minted seen=true", async () => {
+        const alice = transport.addClient("alice");
+        transport.addClient("bob"); // Needed as a registered user so createInvite passes the user-existence check
+        const charlie = transport.addClient("charlie");
+        const conversationId = await alice.createConversation();
+
+        // Bob is not invite-subscribed, his invite is created unseen
+        await alice.createInvite(conversationId, "bob");
+        const bobInvite = transport.store.invites.find(i => i.toParticipantId === "bob")!;
+        expect(bobInvite.seen).toBe(false);
+
+        // Charlie subscribes to the invite scope first, so when alice invites him the invite is born seen
+        await charlie.onInvite(() => { });
+        await alice.createInvite(conversationId, "charlie");
+        const charlieInvite = transport.store.invites.find(i => i.toParticipantId === "charlie")!;
+        expect(charlieInvite.seen).toBe(true);
+    });
+
+    test("getInvites marks unseen invites as seen for the calling recipient and the returned snapshots reflect the post-update state, outgoing invites are not touched", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        transport.addClient("charlie");
+        const conversationId = await alice.createConversation();
+
+        // Alice invites bob, bob is recipient and the invite starts unseen
+        await alice.createInvite(conversationId, "bob");
+        expect(transport.store.invites.find(i => i.toParticipantId === "bob")!.seen).toBe(false);
+
+        // Bob fetches, his recipient invite gets marked seen and the returned snapshot shows seen=true
+        const bobInvites = await bob.getInvites();
+        expect(bobInvites.find(i => i.toParticipantId === "bob")?.seen).toBe(true);
+        expect(transport.store.invites.find(i => i.toParticipantId === "bob")!.seen).toBe(true);
+
+        // Alice fetching does not touch the seen state of an invite where she is the sender, the recipient-marker logic only applies to invites where the caller is the recipient
+        await alice.createInvite(conversationId, "charlie");
+        expect(transport.store.invites.find(i => i.toParticipantId === "charlie")!.seen).toBe(false);
+        await alice.getInvites();
+        expect(transport.store.invites.find(i => i.toParticipantId === "charlie")!.seen).toBe(false);
+    });
+
+    test("getHasNew returns hasNewMessages=false and hasNewInvites=false when nothing is pending", async () => {
+        const alice = transport.addClient("alice");
+        const result = await alice.getHasNew();
+        expect(result).toEqual({ hasNewMessages: false, hasNewInvites: false });
+    });
+
+    test("getHasNew returns hasNewInvites=true when the participant has a pending unseen invite, false after they fetch and mark it seen", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+
+        const before = await bob.getHasNew();
+        expect(before.hasNewInvites).toBe(true);
+        expect(before.hasNewMessages).toBe(false);
+
+        // After fetching, the seen state is updated and getHasNew flips
+        await bob.getInvites();
+        const after = await bob.getHasNew();
+        expect(after.hasNewInvites).toBe(false);
+    });
+
+    test("getHasNew returns hasNewMessages=true when there is a message authored by another participant newer than the caller's last_read_message_created_at, false after they catch up", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        // Bob has not seen any messages yet, alice sends one
+        await alice.sendMessage(conversationId, "hi bob");
+        const before = await bob.getHasNew();
+        expect(before.hasNewMessages).toBe(true);
+        expect(before.hasNewInvites).toBe(false);
+
+        // Bob fetches messages, which advances his read pointer via checkUpdateActivity
+        await bob.getMessages(conversationId, null, false, 50);
+        const after = await bob.getHasNew();
+        expect(after.hasNewMessages).toBe(false);
+    });
+
+    test("getHasNew does not flag the participant's own messages as new", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+        await bob.acceptInvite(conversationId);
+
+        await alice.sendMessage(conversationId, "from alice");
+
+        // Alice authored the message, getHasNew for alice should not flag it
+        const aliceResult = await alice.getHasNew();
+        expect(aliceResult.hasNewMessages).toBe(false);
+    });
+
+    test("acceptInvite clears hasNewInvites because the underlying invite row is deleted as part of accepting", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+        await alice.createInvite(conversationId, "bob");
+
+        // Bob has an unseen invite, getHasNew flags it
+        expect((await bob.getHasNew()).hasNewInvites).toBe(true);
+
+        // Accepting deletes the invite row so the unseen-invite EXISTS check finds nothing
+        await bob.acceptInvite(conversationId);
+        expect((await bob.getHasNew()).hasNewInvites).toBe(false);
+    });
+
+    test("getHasNew only flags incoming invites, outgoing invites the caller sent do not count", async () => {
+        const alice = transport.addClient("alice");
+        transport.addClient("bob");
+        const conversationId = await alice.createConversation();
+
+        // Alice sent an invite to bob, alice is the sender so this should NOT flag her
+        await alice.createInvite(conversationId, "bob");
+        const aliceResult = await alice.getHasNew();
+        expect(aliceResult.hasNewInvites).toBe(false);
+    });
+
+    test("getHasNew flags hasNewMessages=true when at least one of multiple conversations has unread messages, even if other conversations are read", async () => {
+        const alice = transport.addClient("alice");
+        const bob = transport.addClient("bob");
+        const conv1 = await alice.createConversation();
+        const conv2 = await alice.createConversation();
+        await alice.createInvite(conv1, "bob");
+        await alice.createInvite(conv2, "bob");
+        await bob.acceptInvite(conv1);
+        await bob.acceptInvite(conv2);
+
+        // Alice posts in both, bob catches up on conv1 only
+        await alice.sendMessage(conv1, "hi in 1");
+        await alice.sendMessage(conv2, "hi in 2");
+        await bob.getMessages(conv1, null, false, 50);
+
+        // conv2 is still unread, hasNewMessages stays true
+        const result = await bob.getHasNew();
+        expect(result.hasNewMessages).toBe(true);
+    });
 });
 
 describe("client API matches documented return types", () => {

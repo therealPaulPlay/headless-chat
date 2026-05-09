@@ -45,6 +45,11 @@ export async function getMessagesByIds(ctx: ServerContext, messageIds: string[])
     return { result, hooks: [] };
 }
 
+export async function getHasNew(ctx: ServerContext, participantId: string): Promise<ServiceResult<{ hasNewMessages: boolean, hasNewInvites: boolean }>> {
+    const result = await getHandler(ctx.handlers, "readHasNew")(participantId);
+    return { result, hooks: [] };
+}
+
 // Update the participant's last-read message if any of the provided messages is newer than the cached one
 export async function checkUpdateActivity(ctx: ServerContext, conversationId: string, participantId: string, messages: { messageId: string, createdAt: Date }[]): Promise<void> {
     if (messages.length === 0) return;

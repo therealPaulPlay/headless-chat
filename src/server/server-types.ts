@@ -65,7 +65,7 @@ export type Handlers = {
 
     readConversations?: Handler<[string], Conversation[]>,
     readMessages?: Handler<[string, string | null, boolean, number], { messages: Message[], remainingInDirection: number }>,
-    readInvitesInvolvingParticipant?: Handler<[string], Invite[]>, // (participantId), returns all invites where this participant is the sender or recipient
+    readInvitesInvolvingParticipant?: Handler<[string], Invite[]>, // (participantId), returns all invites where this participant is the sender or recipient, also marks unseen invites as seen where this participant is the recipient (returned snapshots reflect post-update state)
     readInvitesForRecipient?: Handler<[string, string], Invite[]>, // (conversationId, toParticipantId), returns all invites the recipient has for the conversation across all senders
     readAliases?: Handler<[string[]], Alias[]>,
     readConversationParticipantActivity?: Handler<[string, string], ParticipantActivity | null>,
@@ -76,6 +76,7 @@ export type Handlers = {
     readConversation?: Handler<[string], Conversation | null>,
     readInvite?: Handler<[string, string, string], Invite | null>, // (conversationId, fromParticipantId, toParticipantId)
     readReaction?: Handler<[string], Reaction | null>,
+    readHasNew?: Handler<[string], { hasNewMessages: boolean, hasNewInvites: boolean }>, // (participantId), bundle two EXISTS checks (unread messages + unseen invites) in one query for the getHasNew RPC
 
     updateMessage?: Handler<[Message], void>,
     updateConversationParticipantActivity?: Handler<[ParticipantActivity], void>,

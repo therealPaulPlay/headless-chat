@@ -247,6 +247,10 @@ export class InMemoryStore {
         });
         server.onReadInvitesInvolvingParticipant(participantId => {
             this.bump("readInvitesInvolvingParticipant");
+            // Mark unseen invites as seen where this participant is the recipient
+            for (const i of this.invites) {
+                if (i.toParticipantId === participantId && !i.seen) i.seen = true;
+            }
             return this.invites
                 .filter(i => i.fromParticipantId === participantId || i.toParticipantId === participantId)
                 .map(i => ({ ...i }));
@@ -280,6 +284,24 @@ export class InMemoryStore {
         server.onReadParticipantActivities(participantId => {
             this.bump("readParticipantActivities");
             return [...this.activities.values()].filter(a => a.participantId === participantId).map(a => ({ ...a }));
+        });
+        server.onReadHasNew(participantId => {
+            this.bump("readHasNew");
+            // Unread message exists when any conversation the participant is in has a lastMessage authored by someone else with createdAt newer than the participant's last_read_message_created_at
+            const conversationIds = [...this.conversationParticipants.entries()]
+                .filter(([_, set]) => set.has(participantId))
+                .map(([cid]) => cid);
+            const hasNewMessages = conversationIds.some(cid => {
+                const messagesIn = [...this.messages.values()].filter(m => m.conversationId === cid);
+                if (messagesIn.length === 0) return false;
+                const last = messagesIn.reduce((a, b) => a.createdAt.getTime() > b.createdAt.getTime() ? a : b);
+                if (last.participantId === participantId) return false;
+                const activity = this.activities.get(this.activityKey(cid, participantId));
+                const lastReadTs = activity?.lastReadMessageCreatedAt.getTime() ?? 0;
+                return last.createdAt.getTime() > lastReadTs;
+            });
+            const hasNewInvites = this.invites.some(i => i.toParticipantId === participantId && !i.seen);
+            return { hasNewMessages, hasNewInvites };
         });
 
         // Update handlers -----------------------------------------------

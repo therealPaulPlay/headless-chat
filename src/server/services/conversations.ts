@@ -71,11 +71,13 @@ export async function createInviteAdmin(ctx: ServerContext, fromParticipantId: s
         if (!allowed) throw new Error("Not authorized to invite this participant");
     }
 
+    // Subscribed means seen, if the recipient is invite-subscribed at create time, mint as seen
     const invite: Invite = {
         fromParticipantId,
         toParticipantId,
         conversation,
         createdAt: now(),
+        seen: ctx.subscriptions.hasSubscriber({ kind: "invite" }, toParticipantId),
     };
     // Handler dedupes on the triple, throws if recipient is already a participant or sender is at the outgoing-invite cap, returns inserted: false on a dedup no-op so we skip the broadcast + hook
     const { inserted } = await getHandler(ctx.handlers, "createInvite")(invite, ctx.rateLimits.inviteLimitPerParticipant);

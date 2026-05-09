@@ -25,6 +25,11 @@ export class Subscriptions {
 
     setContext(ctx: ServerContext): void { this.ctx = ctx; }
 
+    // Whether this participant is currently subscribed to the given scope
+    hasSubscriber(scope: Scope, participantId: string): boolean {
+        return this.byScope.get(encodeScope(scope))?.has(participantId) ?? false;
+    }
+
     // Add a participant to a specific scope
     add(participantId: string, scope: Scope): boolean {
         const encoded = encodeScope(scope);

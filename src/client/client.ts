@@ -207,6 +207,9 @@ export class Client {
     getParticipantActivities(): Promise<ParticipantActivity[]> {
         return this.request<ParticipantActivity[]>("getParticipantActivities", []);
     }
+    getHasNew(): Promise<{ hasNewMessages: boolean, hasNewInvites: boolean }> {
+        return this.request<{ hasNewMessages: boolean, hasNewInvites: boolean }>("getHasNew", []);
+    }
 
     // Event subscriptions ------------------------------------------------
 

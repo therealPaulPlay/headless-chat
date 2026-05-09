@@ -109,6 +109,7 @@ export class Server {
     onReadConversation(handler: Handler<[string], Conversation | null>) { this.handlers.readConversation = handler; }
     onReadInvite(handler: Handler<[string, string, string], Invite | null>) { this.handlers.readInvite = handler; }
     onReadReaction(handler: Handler<[string], Reaction | null>) { this.handlers.readReaction = handler; }
+    onReadHasNew(handler: Handler<[string], { hasNewMessages: boolean, hasNewInvites: boolean }>) { this.handlers.readHasNew = handler; }
 
     onUpdateMessage(handler: Handler<[Message], void>) { this.handlers.updateMessage = handler; }
     onUpdateConversationParticipantActivity(handler: Handler<[ParticipantActivity], void>) { this.handlers.updateConversationParticipantActivity = handler; }
@@ -213,6 +214,7 @@ export class Server {
             case "getInvites": return gettersService.getInvites(this.ctx, participantId);
             case "getAliases": return gettersService.getAliases(this.ctx, args[0] as string[]);
             case "getParticipantActivities": return gettersService.getParticipantActivities(this.ctx, participantId);
+            case "getHasNew": return gettersService.getHasNew(this.ctx, participantId);
             default: throw new Error(`Unknown method: ${method}`);
         }
     }

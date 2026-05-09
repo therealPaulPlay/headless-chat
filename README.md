@@ -8,6 +8,8 @@ Slightly opinionated core chat logic. No database implementation, no transport i
 - Something that works with your own DB
 - Freedom to choose your protocol (WS & SSE recommended)
 
+This library powers the messaging functionality in OpenGuessr.
+
 #### Limitations
 
 - Assumes sane conversation and invite amounts (they are not paginated)
@@ -73,6 +75,7 @@ A function that takes no parameters and returns `authData: unknown` that is sent
 | async getInvites() | invites: Invite[]| Get all invites, both for the participant and by the participant. |
 | async getAliases([participantId: string, participantId...]) | aliases: Alias[] | Get server-defined aliases for participants. This serves as a simple lookup for your server-defined username system. |
 | async getParticipantActivities() | activities: ParticipantActivity[] | Get the calling participant's read state across all their conversations. Used to derive unread counts client-side. |
+| async getHasNew() | { hasNewMessages: boolean, hasNewInvites: boolean } | Single round-trip cheap check for any new activity. |
 
 Event methods are async because subscribing and unsubscribing roundtrip to the server, so events may take a brief moment to start or stop arriving. Calling the same `on*` method twice for the same scope is allowed (e.g. to listen in two different places).
 
@@ -204,12 +207,13 @@ An object that configures the automated cleanup. Cleanup measured in days runs o
 | onReadMessagesByIds(handler: function) | messageIds: string[] | messages: Message[] | Should return all matching messages with reactions populated, in any order. Missing IDs are omitted from the result. |
 | onReadConversationLastMessageMetadata(handler: function) | conversationId: string | { messageId: string, createdAt: Date } \| null | Should return the ID and timestamp of the conversation's most recent message, or null if it has none. |
 | onReadReaction(handler: function) | reactionId: string | reaction: Reaction \| null | Should return the reaction by ID, or null. |
-| onReadInvitesInvolvingParticipant(handler: function) | participantId: string | invites: Invite[] | Should return all invites where the participant is the sender or recipient, ordered by `createdAt` descending. |
+| onReadInvitesInvolvingParticipant(handler: function) | participantId: string | invites: Invite[] | Should return all invites where the participant is the sender or recipient, ordered by `createdAt` descending. Mark unseen invites as seen where this participant is the recipient. Returned snapshots should reflect the post-update state. |
 | onReadInvitesForRecipient(handler: function) | conversationId: string, toParticipantId: string | invites: Invite[] | Should return all invites the recipient has for the conversation across all senders. |
 | onReadInvite(handler: function) | conversationId: string, fromParticipantId: string, toParticipantId: string | invite: Invite \| null | Should return the invite matching the triple, or null. |
 | onReadAliases(handler: function) | participantIds: string[] | aliases: Alias[] | Should return all aliases for the provided participant IDs. In a simple implementation, this can look up the usernames from an existing users table. |
 | onReadConversationParticipantActivity(handler: function) | conversationId: string, participantId: string | participantActivity: ParticipantActivity \| null | Should return the participant activity from the database or `null` if it does not exist. |
 | onReadParticipantActivities(handler: function) | participantId: string | activities: ParticipantActivity[] | Should return all participant activity rows for the given participant. |
+| onReadHasNew(handler: function) | participantId: string | { hasNewMessages: boolean, hasNewInvites: boolean } | Should return whether the participant has any unseen invites and any conversation where the latest message is newer than their last read pointer and not authored by them. Implement as one query. |
 
 **Update handlers:**
 | Method | Calls with | Should return | Description |
@@ -346,6 +350,7 @@ ConversationRecord & {
     toParticipantId: string, // The participant who is invited
     conversation: Conversation,
     createdAt: Date,
+    seen: boolean, // Whether the recipient has seen the invite
 }
 ```
 
