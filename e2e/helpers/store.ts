@@ -118,7 +118,17 @@ export class InMemoryStore {
                 oldestMessagesByConversationId.set(message.conversationId, { ...message, reactions: [] });
                 // No lastActivityAt bump, the system message is backdated and lastActivityAt should reflect the most recent real activity
             }
-            return { oldestMessagesByConversationId };
+            // Clamp stale participant activities onto the resulting oldest system message (update only, never create rows) so the backdated system message never counts as unread, covers the dedup case and the roll-forward
+            const updatedParticipantActivities: ParticipantActivity[] = [];
+            for (const [conversationId, oldest] of oldestMessagesByConversationId) {
+                for (const activity of this.activities.values()) {
+                    if (activity.conversationId !== conversationId || activity.lastReadMessageCreatedAt.getTime() >= oldest.createdAt.getTime()) continue;
+                    activity.lastReadMessageId = oldest.messageId;
+                    activity.lastReadMessageCreatedAt = oldest.createdAt;
+                    updatedParticipantActivities.push({ ...activity });
+                }
+            }
+            return { oldestMessagesByConversationId, updatedParticipantActivities };
         });
         server.onCreateReaction(reaction => {
             this.bump("createReaction");
@@ -371,13 +381,17 @@ export class InMemoryStore {
         });
         server.onDeleteMessagesBefore(thresholdDate => {
             this.bump("deleteMessagesBefore");
+            // Affected means at least one expiring real message, an expiring "messagesRemoved" system message alone doesn't count, otherwise dormant conversations would re-post it daily
             const affected = new Set<string>();
+            for (const m of this.messages.values()) {
+                if (m.createdAt.getTime() < thresholdDate.getTime() && m.systemEvent?.type !== "messagesRemoved") affected.add(m.conversationId);
+            }
+            // Delete expiring real messages everywhere, expired "messagesRemoved" system messages only in affected conversations so they roll forward to the new cut point
             for (const [id, m] of this.messages) {
-                if (m.createdAt.getTime() < thresholdDate.getTime()) {
-                    affected.add(m.conversationId);
-                    for (const r of m.reactions) this.reactions.delete(r.reactionId);
-                    this.messages.delete(id);
-                }
+                if (m.createdAt.getTime() >= thresholdDate.getTime()) continue;
+                if (m.systemEvent?.type === "messagesRemoved" && !affected.has(m.conversationId)) continue;
+                for (const r of m.reactions) this.reactions.delete(r.reactionId);
+                this.messages.delete(id);
             }
             return { affectedConversationIds: [...affected] };
         });

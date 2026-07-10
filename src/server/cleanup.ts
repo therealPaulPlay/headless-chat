@@ -89,15 +89,16 @@ export class CleanupScheduler {
                 logInfo("daily messageAfterDays cleanup", { affectedConversations: affectedConversationIds.length, durationMs: Date.now() - startedAt });
 
                 // Post a "messagesRemoved" system message per affected conversation, backdated so it sorts before any surviving message and never bumps lastActivityAt
-                // Not broadcast, live clients still hold the older messages in memory until they refresh
+                // The handler also clamps stale participant activities onto the system message, otherwise it would count as unread for everyone whose last activity predates the cutoff, flipping fully-read conversations to "new" on every run
+                // Not broadcast (neither the system message nor the clamped activities), live clients still hold the older messages in memory until they refresh
                 if (affectedConversationIds.length > 0) {
                     const sysMsgCreatedAt = new Date(threshold.getTime() - 1);
                     const sysMsgs = affectedConversationIds.map(conversationId =>
                         buildMessage("server", conversationId, "", undefined, { type: "messagesRemoved" }, sysMsgCreatedAt),
                     );
                     try {
-                        // Handler dedups per conversation and returns the resulting oldest system message for each (just-inserted or pre-existing)
-                        const { oldestMessagesByConversationId } = await getHandler(this.ctx.handlers, "createMessagesSystemRemoved")(sysMsgs);
+                        // Handler dedups per conversation, returns the resulting oldest system message for each (just-inserted or pre-existing) plus the clamped activity rows
+                        const { oldestMessagesByConversationId, updatedParticipantActivities } = await getHandler(this.ctx.handlers, "createMessagesSystemRemoved")(sysMsgs);
 
                         // Patch caches before firing hooks so hooks reading through the cache see post-cleanup state
                         for (const [conversationId, oldest] of oldestMessagesByConversationId) {
@@ -106,6 +107,12 @@ export class CleanupScheduler {
                             if (cached?.lastMessage && cached.lastMessage.createdAt < threshold) {
                                 this.ctx.conversationCache.set(conversationId, { ...cached, lastMessage: oldest });
                             }
+                        }
+                        // Mirror the handler's forwards activity clamp for entries that are currently cached, only lift older values so a pointer that advanced concurrently is never stamped backwards
+                        for (const activity of updatedParticipantActivities) {
+                            const key = `${activity.conversationId}|${activity.participantId}`;
+                            const cached = this.ctx.activityCache.get(key);
+                            if (cached !== undefined && cached < activity.lastReadMessageCreatedAt.getTime()) this.ctx.activityCache.set(key, activity.lastReadMessageCreatedAt.getTime());
                         }
 
                         // Fire afterMessageCreated only for sysMsgs we actually inserted (matched by messageId against the ones we built locally)

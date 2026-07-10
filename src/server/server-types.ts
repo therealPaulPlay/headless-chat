@@ -57,7 +57,7 @@ export type Handler<Args extends unknown[], R> = (...args: Args) => R | Promise<
 export type Handlers = {
     createConversation?: Handler<[ConversationRecord, string, number], void>, // (record, creatorParticipantId, conversationLimitPerParticipant), throw if creator is at the cap
     createMessage?: Handler<[Message], void>,
-    createMessagesSystemRemoved?: Handler<[Message[]], { oldestMessagesByConversationId: Map<string, Message> }>, // Bulk-insert "messagesRemoved" system messages, dedup per-conversation against the current oldest, return each conversation's resulting oldest (just-inserted or pre-existing), always called with at least one message
+    createMessagesSystemRemoved?: Handler<[Message[]], { oldestMessagesByConversationId: Map<string, Message>, updatedParticipantActivities: ParticipantActivity[] }>, // Bulk-insert "messagesRemoved" system messages, dedup per-conversation against the current oldest and return each conversation's resulting oldest (just-inserted or pre-existing), clamp older participant activities onto it so it never counts as unread and return the updated rows, always called with at least one message
     createReaction?: Handler<[Reaction], void>,
     createInvite?: Handler<[Invite, number], { inserted: boolean }>, // (invite, inviteLimitPerParticipant), throw if the sender already has the cap of pending outgoing invites. Return inserted: false on a dedup no-op (triple already exists) so the lib skips the broadcast + afterInviteCreated hook
     createConversationParticipant?: Handler<[string, string, number, number], void>, // (conversationId, participantId, conversationParticipantLimit, conversationLimitPerParticipant), throw if either cap exceeded
